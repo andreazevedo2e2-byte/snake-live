@@ -13,6 +13,13 @@ export class Sfx {
     return this.ctx;
   }
 
+  /** Browsers start an AudioContext suspended until a user gesture. Call this
+   * from the same gesture that starts the stream so SFX actually play. */
+  resume(): void {
+    const ctx = this.getContext();
+    if (ctx.state === "suspended") void ctx.resume();
+  }
+
   private tone(freq: number, durationMs: number, type: OscillatorType = "sine", gainPeak = 0.18): void {
     const ctx = this.getContext();
     const osc = ctx.createOscillator();

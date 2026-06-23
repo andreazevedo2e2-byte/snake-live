@@ -2,6 +2,7 @@ import { Container, Graphics, Text, Sprite, Texture } from "pixi.js";
 import type { LeaderboardEntry } from "../game/Leaderboard";
 import { LAYOUT, COLORS, SCREEN_WIDTH } from "./layout";
 import { TextureCache } from "./TextureCache";
+import { reconcileSlots } from "./leaderboardTextures";
 import { MAX_MULTIPLIER, MIN_MULTIPLIER } from "../game/SpeedMeter";
 
 const LEADERBOARD_ROWS = 5;
@@ -16,6 +17,9 @@ export class HudRenderer {
   private speedLabel: Text;
   private leaderboardRows: Text[] = [];
   private leaderboardAvatars: Sprite[] = [];
+  /** URL currently held (acquired) by each leaderboard slot, so we only
+   * acquire on real changes and release what we replace — see reconcileSlots. */
+  private slotUrls: Array<string | null> = new Array(LEADERBOARD_ROWS).fill(null);
   private notificationText: Text;
   private notificationTimer: ReturnType<typeof setTimeout> | null = null;
   private instructionsText: Text;
@@ -103,6 +107,7 @@ export class HudRenderer {
   setLeaderboard(top: LeaderboardEntry[], hero: LeaderboardEntry | null): void {
     this.heroLabel.text = hero ? `🏆 #1 HERO: ${hero.name}` : "🏆 #1 HERO: —";
 
+    const nextUrls: Array<string | null> = new Array(LEADERBOARD_ROWS).fill(null);
     for (let i = 0; i < LEADERBOARD_ROWS; i++) {
       const entry = top[i];
       const text = this.leaderboardRows[i]!;
@@ -115,10 +120,22 @@ export class HudRenderer {
       avatar.visible = true;
       const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}.`;
       text.text = `${medal} ${entry.name}  🍎${entry.score}`;
-      this.avatarCache.acquire(entry.avatarUrl).then((texture) => {
-        avatar.texture = texture;
+      nextUrls[i] = entry.avatarUrl;
+    }
+
+    // Only touch the cache for slots that actually changed, and acquire before
+    // releasing so a viewer moving rank doesn't transiently evict their avatar.
+    const { acquire, release, nextHeld } = reconcileSlots(this.slotUrls, nextUrls);
+    for (const { slot, url } of acquire) {
+      const avatar = this.leaderboardAvatars[slot]!;
+      this.avatarCache.acquire(url).then((texture) => {
+        if (this.slotUrls[slot] === url) avatar.texture = texture;
       });
     }
+    for (const url of release) {
+      this.avatarCache.release(url, (texture) => texture.destroy(true));
+    }
+    this.slotUrls = nextHeld;
   }
 
   notify(message: string): void {

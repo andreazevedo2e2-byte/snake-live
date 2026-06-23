@@ -57,4 +57,27 @@ describe("TextureCache", () => {
     expect(onEvict).not.toHaveBeenCalled();
     expect(fallback).toHaveBeenCalledTimes(1);
   });
+
+  test("a release during a still-pending load does not leak (evicts once it resolves)", async () => {
+    // This is the real-world race: a food/leaderboard avatar is removed before
+    // its texture finishes downloading. The cache must register the URL
+    // synchronously on acquire so the early release is not a no-op.
+    let resolve!: (t: string) => void;
+    const loader = vi.fn(() => new Promise<string>((r) => (resolve = r)));
+    const fallback = vi.fn().mockResolvedValue("fallback-texture");
+    const cache = new TextureCache<string>(loader, fallback);
+    const onEvict = vi.fn();
+
+    const p = cache.acquire("https://cdn/slow.png"); // refCount 1, load pending
+    cache.release("https://cdn/slow.png", onEvict); // released while still loading
+    resolve("texture-slow"); // download finishes AFTER the release
+    await p;
+    await Promise.resolve(); // flush the deferred eviction
+
+    expect(onEvict).toHaveBeenCalledWith("texture-slow");
+
+    // The entry must have been evicted, so a fresh acquire reloads from scratch.
+    cache.acquire("https://cdn/slow.png");
+    expect(loader).toHaveBeenCalledTimes(2);
+  });
 });

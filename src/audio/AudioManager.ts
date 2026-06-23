@@ -9,11 +9,13 @@ export class AudioManager {
     this.music = new MusicPlayer(musicTrackUrls);
   }
 
-  startMusic(): void {
+  /** Call from a user gesture: unlocks SFX audio and starts background music. */
+  start(): void {
+    this.sfx.resume();
     this.music.start();
   }
 
-  stopMusic(): void {
+  stop(): void {
     this.music.stop();
   }
 

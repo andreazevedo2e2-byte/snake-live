@@ -55,11 +55,15 @@ async function main(): Promise<void> {
   app.stage.addChild(board.view, hud.view, screens.view);
 
   const audio = new AudioManager(await loadMusicPlaylist());
+  // Autoplay policy: audio can only start from a user gesture. André clicks
+  // the window once when setting up OBS, which unlocks both SFX and music.
   const startAudioOnce = () => {
-    audio.startMusic();
+    audio.start();
     window.removeEventListener("pointerdown", startAudioOnce);
+    window.removeEventListener("keydown", startAudioOnce);
   };
   window.addEventListener("pointerdown", startAudioOnce);
+  window.addEventListener("keydown", startAudioOnce);
 
   let state = createGame(DEFAULT_CONFIG);
   let speed = createSpeedMeter();
@@ -113,18 +117,13 @@ async function main(): Promise<void> {
 
     if (state.status === "playing") {
       const scoreBefore = state.score;
-      const avatarFoodsBefore = state.avatarFoods;
 
       const direction = decideMove(state);
       const next = tick(setDirection(state, direction));
 
-      if (next.score > scoreBefore) {
-        audio.onEat();
-        // Whichever avatar food (if any) is gone from the new state was just eaten —
-        // diffing by id (not array length) survives queue promotion replacing it 1-for-1.
-        const eaten = avatarFoodsBefore.find((f) => !next.avatarFoods.some((nf) => nf.id === f.id));
-        if (eaten) board.releaseAvatarFood(eaten);
-      }
+      // Texture release for consumed/cleared foods is handled by the render
+      // reconciliation in BoardRenderer; here we only react with sound.
+      if (next.score > scoreBefore) audio.onEat();
       if (next.status === "victory") {
         audio.onVictory();
         scheduleAutoStart(true);
