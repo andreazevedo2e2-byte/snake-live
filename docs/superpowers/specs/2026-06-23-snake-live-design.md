@@ -168,6 +168,41 @@ sozinho: joga, lê o chat, reinicia partidas. **Sem nuvem, sem VPS.** Infra = PC
 
 ---
 
+## 10. Rev 2 — Requisitos adicionais & decisões autônomas (2026-06-23)
+
+**Formato & apresentação**
+- **9:16 vertical (1080×1920)** — toda a tela é portrait, pensada pra mobile/Shorts, igual
+  aos prints de referência.
+- **Inglês, mas mínimo de texto.** Comunicação por ícones, emojis e números (food = 🍎,
+  SPEED ×N, ❤️, 🎁, selo VIP, #1 HERO). Meta: alguém que não lê inglês entende o que fazer
+  só pela imagem — exatamente como os prints do MegoMG.
+- **Bonito e bem estruturado** é critério de aceite, não enfeite: hierarquia visual clara,
+  animações suaves, brilhos nos eventos.
+
+**Música (decisão autônoma)**
+- Playlist tocando ao longo do jogo via faixas **copyright-free / CC0**, hospedadas
+  **localmente** e tocadas **dentro do app** (camada de áudio, ex.: Howler), com **shuffle +
+  crossfade** e loop infinito.
+- **Por quê (e não playlist do YouTube / música protegida):** música protegida = Content ID
+  / strike / desmonetização — fatal pra um canal que quer entrar no YPP. Local + CC0 =
+  controle total, sem risco, funciona offline, capturada junto pelo OBS.
+- O André pode trocar/curar as faixas depois; eu sigo com um conjunto inicial CC0.
+
+**Arquitetura de execução (decisão autônoma)**
+- **App local único** roda na máquina do André durante a live: serve o frontend (jogo
+  PixiJS), roda o scraper de chat e expõe o WebSocket — tudo em **localhost**. O OBS captura
+  a janela do navegador e transmite.
+- **Por quê não Vercel pro backend:** o leitor de chat é **processo persistente** (conexão
+  contínua), incompatível com serverless. O **frontend** (estático) pode ir pro Vercel
+  depois como conveniência, mas a operação roda local. **Dev em localhost primeiro.**
+- **Sem API key / OAuth na v1** (scraper). Nada que o André precise providenciar agora pra
+  começar a construir.
+
+**Dependências que o André fornece (em runtime, não pra construir)**
+- A **URL/ID da própria live** do YouTube (pra o scraper saber qual chat ler) — informado na
+  hora de transmitir.
+- Opcional: paleta/logo da marca; faixas CC0 próprias se quiser curar.
+
 ## Decisões registradas (resumo)
 
 | Tópico | Decisão |
@@ -189,3 +224,8 @@ sozinho: joga, lê o chat, reinicia partidas. **Sem nuvem, sem VPS.** Infra = PC
 | Vitória | Preencher o mapa inteiro |
 | Fonte de comida | 1 maçã base sempre + avatares extras via comentário |
 | Tabuleiro | Começa ~12×12 (ajustável) |
+| Formato | 9:16 vertical (1080×1920), mobile/Shorts |
+| Linguagem visual | Inglês, mínimo de texto, ícones/emojis/números |
+| Música | Copyright-free/CC0, local, in-app, shuffle + crossfade |
+| Execução | App local único (localhost) + OBS; Vercel só p/ frontend, depois |
+| API key / OAuth | Nenhuma na v1 (scraper) |
