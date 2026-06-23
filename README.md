@@ -14,8 +14,25 @@ lê o chat sem API key (scraper), e toca música copyright-free de fundo.
 
 ## Status
 
-Planejamento concluído. Implementação ainda não iniciada.
+v1 implementado (TDD nas partes puras: jogo, autopilot, chat, leaderboard, speed meter,
+texture cache). Falta apenas: curar a playlist de música CC0 (`public/assets/music/playlist.json`,
+vazia por padrão) e fazer o ensaio de estabilidade de 3h com OBS antes de ir ao ar.
 
-## Stack (planejada)
+## Como rodar
 
-TypeScript · PixiJS (WebGL) · Node · WebSocket · `youtube-chat` (scraper) · Howler (áudio)
+```bash
+npm install
+npm test       # roda a suíte de testes (vitest)
+npm run dev    # frontend (vite) + backend de chat juntos
+```
+
+Por padrão o backend usa um chat falso (`FakeChatSource`) pra ensaiar sem estar ao vivo.
+Pra ler o chat real de uma live, defina a URL antes de rodar o backend:
+
+```bash
+SNAKE_LIVE_URL="https://www.youtube.com/watch?v=SEU_VIDEO_ID" npm run dev:server
+```
+
+## Stack
+
+TypeScript · PixiJS (WebGL) · Node · WebSocket · `youtube-chat` (scraper) · Howler (áudio) · Vitest (TDD)

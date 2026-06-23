@@ -1,0 +1,43 @@
+{
+  "name": "snake-live",
+  "version": "1.0.0",
+  "description": "Jogo de cobrinha **automatizado** para lives interativas no YouTube (formato 9:16). Um bot joga sozinho e o chat ao vivo interfere no jogo: cada comentário vira comida (o avatar do espectador), enche a barra de velocidade e sobe no ranking de _top viewers_.",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n web,server -c blue,green \"vite\" \"tsx watch server/index.ts\"",
+    "dev:web": "vite",
+    "dev:server": "tsx watch server/index.ts",
+    "build": "vite build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andreazevedo121/snake-live.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/andreazevedo121/snake-live/issues"
+  },
+  "homepage": "https://github.com/andreazevedo121/snake-live#readme",
+  "devDependencies": {
+    "@types/howler": "^2.2.13",
+    "@types/node": "^26.0.0",
+    "@types/ws": "^8.18.1",
+    "@vitest/ui": "^4.1.9",
+    "concurrently": "^10.0.3",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "vite": "^8.1.0",
+    "vitest": "^4.1.9"
+  },
+  "dependencies": {
+    "howler": "^2.2.4",
+    "pixi.js": "^8.19.0",
+    "ws": "^8.21.0",
+    "youtube-chat": "^2.2.0"
+  }
+}
