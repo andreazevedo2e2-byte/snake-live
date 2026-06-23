@@ -18,6 +18,10 @@ v1 implementado (TDD nas partes puras: jogo, autopilot, chat, leaderboard, speed
 texture cache). Falta apenas: curar a playlist de música CC0 (`public/assets/music/playlist.json`,
 vazia por padrão) e fazer o ensaio de estabilidade de 3h com OBS antes de ir ao ar.
 
+Os efeitos sonoros ficam em `public/assets/sfx/` e comecam com pacotes CC0: Kenney UI Audio
+para cliques/teclas e Snake sprites & sound para comer/morrer. Creditos e links estao em
+`public/assets/sfx/CREDITS.md`.
+
 ## Como rodar
 
 ```bash

@@ -12,7 +12,7 @@ describe("Leaderboard", () => {
     let board = createLeaderboard();
     board = creditViewer(board, { channelId: "UC1", name: "Ana", avatarUrl: "a.png" });
     const top = topViewers(board, 5);
-    expect(top).toEqual([{ channelId: "UC1", name: "Ana", avatarUrl: "a.png", score: 1 }]);
+    expect(top).toEqual([{ channelId: "UC1", name: "Ana", avatarUrl: "a.png", score: 1, foodCount: 0, speedCount: 0 }]);
   });
 
   test("crediting the same viewer again accumulates their score", () => {
@@ -38,5 +38,13 @@ describe("Leaderboard", () => {
     board = creditViewer(board, { channelId: "UC2", name: "Bia", avatarUrl: "b.png" });
     board = creditViewer(board, { channelId: "UC2", name: "Bia", avatarUrl: "b.png" });
     expect(getHero(board)?.channelId).toBe("UC2");
+  });
+
+  test("tracks food and speed commands separately", () => {
+    let board = createLeaderboard();
+    const viewer = { channelId: "UC1", name: "Ana", avatarUrl: "a.png" };
+    board = creditViewer(board, viewer, "food");
+    board = creditViewer(board, viewer, "speed");
+    expect(topViewers(board, 1)[0]).toMatchObject({ score: 2, foodCount: 1, speedCount: 1 });
   });
 });

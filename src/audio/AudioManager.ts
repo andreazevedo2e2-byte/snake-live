@@ -23,12 +23,24 @@ export class AudioManager {
     this.sfx.turn();
   }
 
+  onMove(): void {
+    this.sfx.move();
+  }
+
+  onStartClick(): void {
+    this.sfx.startClick();
+  }
+
   onEat(): void {
     this.sfx.eat();
   }
 
   onBoost(): void {
     this.sfx.boost();
+  }
+
+  onSpeedMilestone(): void {
+    this.sfx.speedMilestone();
   }
 
   onVictory(): void {

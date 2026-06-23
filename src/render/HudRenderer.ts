@@ -5,126 +5,201 @@ import { TextureCache } from "./TextureCache";
 import { reconcileSlots } from "./leaderboardTextures";
 import { MAX_MULTIPLIER, MIN_MULTIPLIER } from "../game/SpeedMeter";
 
-const LEADERBOARD_ROWS = 5;
+const LEADERBOARD_ROWS = 3;
 const NOTIFICATION_LIFETIME_MS = 2200;
+const FONT = "Arial, Helvetica, sans-serif";
+
+function label(text: string, size: number, fill: number = COLORS.hud): Text {
+  return new Text({
+    text,
+    style: {
+      fill,
+      fontFamily: FONT,
+      fontSize: size,
+      fontWeight: "900",
+      letterSpacing: 1,
+      dropShadow: { color: 0x000000, alpha: 0.7, blur: 2, distance: 2 },
+    },
+  });
+}
 
 export class HudRenderer {
   readonly view = new Container();
 
-  private heroLabel: Text;
-  private speedBarTrack: Graphics;
+  private chrome = new Graphics();
+  private subsText: Text;
+  private winsText: Text;
   private speedBarFill: Graphics;
+  private speedNeedle: Graphics;
   private speedLabel: Text;
   private leaderboardRows: Text[] = [];
   private leaderboardAvatars: Sprite[] = [];
-  /** URL currently held (acquired) by each leaderboard slot, so we only
-   * acquire on real changes and release what we replace — see reconcileSlots. */
+  private rowBgs: Graphics[] = [];
   private slotUrls: Array<string | null> = new Array(LEADERBOARD_ROWS).fill(null);
   private notificationText: Text;
+  private notificationBg: Graphics;
   private notificationTimer: ReturnType<typeof setTimeout> | null = null;
-  private instructionsText: Text;
 
   constructor(private avatarCache: TextureCache<Texture>) {
-    const heroBg = new Graphics()
-      .roundRect(LAYOUT.heroBanner.x + 30, LAYOUT.heroBanner.y, SCREEN_WIDTH - 60, LAYOUT.heroBanner.height, 16)
-      .fill({ color: COLORS.panel, alpha: 0.9 });
-    this.heroLabel = new Text({
-      text: "🏆 #1 HERO: —",
-      style: { fill: COLORS.heroGold, fontSize: 34, fontWeight: "bold" },
-    });
-    this.heroLabel.anchor.set(0.5);
-    this.heroLabel.x = SCREEN_WIDTH / 2;
-    this.heroLabel.y = LAYOUT.heroBanner.y + LAYOUT.heroBanner.height / 2;
+    this.drawChrome();
 
-    this.speedBarTrack = new Graphics()
-      .roundRect(LAYOUT.speedBar.x, LAYOUT.speedBar.y, LAYOUT.speedBar.width, LAYOUT.speedBar.height, 10)
-      .fill(COLORS.speedBarTrack);
+    const live = label("LIVE", 34);
+    live.x = 74;
+    live.y = 38;
+
+    this.subsText = label("SUBS 0", 30);
+    this.subsText.x = 220;
+    this.subsText.y = 41;
+
+    this.winsText = label("WINS 0", 30, COLORS.heroGold);
+    this.winsText.x = 420;
+    this.winsText.y = 41;
+
+    const controls = label("🔊   ⛶", 34);
+    controls.x = 800;
+    controls.y = 38;
+
+    const command = label("COMMENT →", 26, COLORS.hudMuted);
+    command.x = 64;
+    command.y = 128;
+    const commandBody = label("FOOD + SPEED", 38, COLORS.heroGold);
+    commandBody.x = 64;
+    commandBody.y = 176;
+
+    const chatTitle = label("MORE CHAT", 25, COLORS.hudMuted);
+    chatTitle.anchor.set(0.5, 0);
+    chatTitle.x = SCREEN_WIDTH / 2;
+    chatTitle.y = 128;
+    const chatBody = label("= FASTER", 29, COLORS.speedBarFill);
+    chatBody.anchor.set(0.5, 0);
+    chatBody.x = SCREEN_WIDTH / 2;
+    chatBody.y = 176;
+
+    const objective = label("TOP CHAT", 25, COLORS.hudMuted);
+    objective.x = 746;
+    objective.y = 128;
+    const objectiveBody = label("most comments", 25, COLORS.notification);
+    objectiveBody.x = 742;
+    objectiveBody.y = 178;
+
+    const speedTitle = label("SPEED", 24);
+    speedTitle.x = 64;
+    speedTitle.y = 292;
+    this.speedLabel = label(`x${MIN_MULTIPLIER.toFixed(1)}`, 30, COLORS.speedBarFill);
+    this.speedLabel.x = 168;
+    this.speedLabel.y = 288;
     this.speedBarFill = new Graphics();
-    this.speedLabel = new Text({
-      text: `⚡ x${MIN_MULTIPLIER.toFixed(1)}`,
-      style: { fill: COLORS.hud, fontSize: 24, fontWeight: "bold" },
-    });
-    this.speedLabel.x = LAYOUT.speedBar.x;
-    this.speedLabel.y = LAYOUT.speedBar.y - 34;
+    this.speedNeedle = new Graphics();
 
-    this.notificationText = new Text({
-      text: "",
-      style: { fill: COLORS.notification, fontSize: 30, fontWeight: "bold" },
+    const tiers = [
+      { x: 340, text: "x1", color: COLORS.hudMuted },
+      { x: 470, text: "x2", color: 0x42ddff },
+      { x: 600, text: "x3", color: COLORS.speedBarFill },
+      { x: 730, text: "x4", color: COLORS.heroGold },
+      { x: 865, text: "x6", color: COLORS.speedBarHot },
+    ];
+    const tierTexts = tiers.map((tier) => {
+      const t = label(tier.text, 28, tier.color);
+      t.x = tier.x;
+      t.y = 287;
+      return t;
     });
-    this.notificationText.anchor.set(0.5, 0);
+
+    this.notificationBg = new Graphics();
+    this.notificationText = label("", 33, COLORS.notification);
+    this.notificationText.anchor.set(0.5);
     this.notificationText.x = SCREEN_WIDTH / 2;
-    this.notificationText.y = LAYOUT.notification.y;
+    this.notificationText.y = LAYOUT.notification.y + LAYOUT.notification.height / 2;
     this.notificationText.alpha = 0;
+    this.notificationBg.alpha = 0;
 
-    this.instructionsText = new Text({
-      text: "💬 Comment to add food & speed up! 🍎",
-      style: { fill: COLORS.hudMuted, fontSize: 26 },
-    });
-    this.instructionsText.anchor.set(0.5);
-    this.instructionsText.x = SCREEN_WIDTH / 2;
-    this.instructionsText.y = LAYOUT.instructions.y + LAYOUT.instructions.height / 2;
+    const topViewers = label("TOP VIEWERS", 35);
+    topViewers.x = LAYOUT.leaderboard.x + 38;
+    topViewers.y = LAYOUT.leaderboard.y + 22;
 
     this.view.addChild(
-      heroBg,
-      this.heroLabel,
+      this.chrome,
+      live,
+      this.subsText,
+      this.winsText,
+      controls,
+      command,
+      commandBody,
+      chatTitle,
+      chatBody,
+      objective,
+      objectiveBody,
+      speedTitle,
       this.speedLabel,
-      this.speedBarTrack,
+      ...tierTexts,
       this.speedBarFill,
+      this.speedNeedle,
+      this.notificationBg,
       this.notificationText,
-      this.instructionsText
+      topViewers
     );
 
     for (let i = 0; i < LEADERBOARD_ROWS; i++) {
+      const bg = new Graphics();
       const avatar = new Sprite(Texture.WHITE);
       avatar.width = 48;
       avatar.height = 48;
-      avatar.x = LAYOUT.leaderboard.x;
-      avatar.y = LAYOUT.leaderboard.y + i * 64;
-      const text = new Text({ text: "", style: { fill: COLORS.hud, fontSize: 28 } });
-      text.x = LAYOUT.leaderboard.x + 64;
-      text.y = LAYOUT.leaderboard.y + i * 64 + 8;
+      avatar.x = LAYOUT.leaderboard.x + 130;
+      avatar.y = LAYOUT.leaderboard.y + 104 + i * 68;
+      avatar.visible = false;
+      const text = label("", 27);
+      text.x = LAYOUT.leaderboard.x + 200;
+      text.y = LAYOUT.leaderboard.y + 113 + i * 68;
+      this.rowBgs.push(bg);
       this.leaderboardAvatars.push(avatar);
       this.leaderboardRows.push(text);
-      this.view.addChild(avatar, text);
+      this.view.addChild(bg, avatar, text);
     }
   }
 
-  setSpeed(multiplier: number): void {
-    const ratio = (multiplier - MIN_MULTIPLIER) / (MAX_MULTIPLIER - MIN_MULTIPLIER);
-    this.speedBarFill
-      .clear()
-      .roundRect(
-        LAYOUT.speedBar.x,
-        LAYOUT.speedBar.y,
-        Math.max(0, LAYOUT.speedBar.width * ratio),
-        LAYOUT.speedBar.height,
-        10
-      )
-      .fill(COLORS.speedBarFill);
-    this.speedLabel.text = `⚡ x${multiplier.toFixed(1)}`;
+  setCounters({ subscribers, victories }: { subscribers: number; victories: number }): void {
+    this.subsText.text = `SUBS ${subscribers.toLocaleString("en-US")}`;
+    this.winsText.text = `WINS ${victories.toLocaleString("en-US")}`;
   }
 
-  setLeaderboard(top: LeaderboardEntry[], hero: LeaderboardEntry | null): void {
-    this.heroLabel.text = hero ? `🏆 #1 HERO: ${hero.name}` : "🏆 #1 HERO: —";
+  setSpeed(multiplier: number): void {
+    const ratio = Math.max(0, Math.min(1, (multiplier - MIN_MULTIPLIER) / (MAX_MULTIPLIER - MIN_MULTIPLIER)));
+    const bar = LAYOUT.speedBar;
+    this.speedBarFill
+      .clear()
+      .roundRect(bar.x, bar.y, bar.width, bar.height, 8)
+      .fill({ color: COLORS.speedBarTrack, alpha: 0.95 })
+      .roundRect(bar.x, bar.y, Math.max(10, bar.width * ratio), bar.height, 8)
+      .fill(COLORS.speedBarFill);
+    this.speedNeedle.clear();
+    this.speedLabel.text = `x${multiplier.toFixed(1)}`;
+  }
 
+  setLeaderboard(top: LeaderboardEntry[], _hero: LeaderboardEntry | null): void {
     const nextUrls: Array<string | null> = new Array(LEADERBOARD_ROWS).fill(null);
     for (let i = 0; i < LEADERBOARD_ROWS; i++) {
       const entry = top[i];
       const text = this.leaderboardRows[i]!;
       const avatar = this.leaderboardAvatars[i]!;
+      const bg = this.rowBgs[i]!;
+      const y = LAYOUT.leaderboard.y + 96 + i * 68;
+
+      bg
+        .clear()
+        .roundRect(LAYOUT.leaderboard.x + 22, y, LAYOUT.leaderboard.width - 44, 60, 7)
+        .fill({ color: i === 0 ? 0x183c0c : 0x121212, alpha: 0.86 })
+        .stroke({ width: i === 0 ? 2 : 1, color: i === 0 ? COLORS.heroGold : COLORS.panelLine, alpha: i === 0 ? 0.8 : 0.22 });
+
       if (!entry) {
         text.text = "";
         avatar.visible = false;
         continue;
       }
       avatar.visible = true;
-      const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}.`;
-      text.text = `${medal} ${entry.name}  🍎${entry.score}`;
+      text.text = `${i + 1}   ${entry.name}    food ${entry.foodCount}   speed ${entry.speedCount}`;
       nextUrls[i] = entry.avatarUrl;
     }
 
-    // Only touch the cache for slots that actually changed, and acquire before
-    // releasing so a viewer moving rank doesn't transiently evict their avatar.
     const { acquire, release, nextHeld } = reconcileSlots(this.slotUrls, nextUrls);
     for (const { slot, url } of acquire) {
       const avatar = this.leaderboardAvatars[slot]!;
@@ -139,11 +214,47 @@ export class HudRenderer {
   }
 
   notify(message: string): void {
+    this.notificationBg
+      .clear()
+      .roundRect(LAYOUT.notification.x, LAYOUT.notification.y, LAYOUT.notification.width, LAYOUT.notification.height, 7)
+      .fill({ color: COLORS.panel, alpha: 0.9 })
+      .stroke({ width: 2, color: COLORS.panelLine, alpha: 0.85 });
     this.notificationText.text = message;
     this.notificationText.alpha = 1;
+    this.notificationBg.alpha = 1;
     if (this.notificationTimer) clearTimeout(this.notificationTimer);
     this.notificationTimer = setTimeout(() => {
       this.notificationText.alpha = 0;
+      this.notificationBg.alpha = 0;
     }, NOTIFICATION_LIFETIME_MS);
+  }
+
+  private drawChrome(): void {
+    this.chrome
+      .clear()
+      .rect(24, 18, SCREEN_WIDTH - 48, 1880)
+      .stroke({ width: 2, color: COLORS.panelLine, alpha: 0.35 })
+      .roundRect(34, 32, 136, 48, 6)
+      .fill(COLORS.liveRed)
+      .circle(58, 56, 11)
+      .fill({ color: COLORS.hud, alpha: 0.55 })
+      .roundRect(LAYOUT.commandPanel.x, LAYOUT.commandPanel.y, LAYOUT.commandPanel.width, LAYOUT.commandPanel.height, 8)
+      .fill({ color: COLORS.panel, alpha: 0.92 })
+      .stroke({ width: 3, color: COLORS.panelLine, alpha: 0.95 })
+      .moveTo(390, LAYOUT.commandPanel.y)
+      .lineTo(390, LAYOUT.commandPanel.y + LAYOUT.commandPanel.height)
+      .moveTo(700, LAYOUT.commandPanel.y)
+      .lineTo(700, LAYOUT.commandPanel.y + LAYOUT.commandPanel.height)
+      .stroke({ width: 1, color: COLORS.panelLine, alpha: 0.4 })
+      .roundRect(LAYOUT.speedPanel.x, LAYOUT.speedPanel.y, LAYOUT.speedPanel.width, LAYOUT.speedPanel.height, 8)
+      .fill({ color: COLORS.panel, alpha: 0.9 })
+      .stroke({ width: 2, color: COLORS.panelLine, alpha: 0.35 })
+      .roundRect(LAYOUT.leaderboard.x, LAYOUT.leaderboard.y, LAYOUT.leaderboard.width, LAYOUT.leaderboard.height, 8)
+      .fill({ color: COLORS.panel, alpha: 0.92 })
+      .stroke({ width: 3, color: COLORS.panelLine, alpha: 0.95 })
+      .roundRect(LAYOUT.leaderboard.x + 8, LAYOUT.leaderboard.y + 8, 320, 64, 7)
+      .fill({ color: 0x24810e, alpha: 0.95 })
+      .rect(60, 1870, SCREEN_WIDTH - 120, 34)
+      .fill({ color: COLORS.speedBarFill, alpha: 0.16 });
   }
 }

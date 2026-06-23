@@ -20,8 +20,8 @@ export interface GameConfig {
 }
 
 export const DEFAULT_CONFIG: GameConfig = {
-  boardSize: 12,
-  maxAvatarFoods: 8,
+  boardSize: 10,
+  maxAvatarFoods: 3,
 };
 
 export interface GameState {

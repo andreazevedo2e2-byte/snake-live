@@ -1,18 +1,19 @@
 import type { Direction, GameState, Rng, Vec2 } from "../game/types";
+import { buildCycleOrder, cycleIndex } from "./hamiltonian";
 
 export interface AutopilotConfig {
   /**
-   * Probability (0-1) that the bot skips the escape-room lookahead and
-   * just takes the greedy shortest-distance move. This is what lets the
-   * snake "play for real" and occasionally trap/kill itself, instead of
-   * playing a mathematically perfect game forever.
+   * How much of the board may still be empty for the bot to allow "shortcuts"
+   * off the safe Hamiltonian cycle. Higher = beelines to food for longer
+   * (more natural, more risk); lower = tightens to the guaranteed-safe cycle
+   * sooner. Expressed as a fraction of total cells that must remain empty.
    */
-  riskLevel: number;
+  shortcutWhileEmptierThan: number;
 }
 
-export const DEFAULT_AUTOPILOT_CONFIG: AutopilotConfig = { riskLevel: 0.12 };
+export const DEFAULT_AUTOPILOT_CONFIG: AutopilotConfig = { shortcutWhileEmptierThan: 0.5 };
 
-const ALL_DIRECTIONS: Direction[] = ["up", "down", "left", "right"];
+const DIRECTIONS: Direction[] = ["up", "down", "left", "right"];
 
 const DIRECTION_VECTORS: Record<Direction, Vec2> = {
   up: { x: 0, y: -1 },
@@ -32,55 +33,64 @@ function key(p: Vec2): string {
   return `${p.x},${p.y}`;
 }
 
-function manhattan(a: Vec2, b: Vec2): number {
-  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
-}
-
-function nearestFood(state: GameState): Vec2 {
-  const head = state.snake[0];
-  let best = state.baseApple;
-  let bestDist = manhattan(head, best);
-  for (const food of state.avatarFoods) {
-    const d = manhattan(head, food.pos);
-    if (d < bestDist) {
-      best = food.pos;
-      bestDist = d;
+// Hamiltonian cycles are fixed per board size; build each one only once.
+const cycleCache = new Map<string, number[]>();
+function getCycle(width: number, height: number): number[] | null {
+  const k = `${width}x${height}`;
+  let order = cycleCache.get(k);
+  if (!order) {
+    try {
+      order = buildCycleOrder(width, height);
+    } catch {
+      return null; // odd-odd board: no cycle exists, fall back to flood-fill survival
     }
+    cycleCache.set(k, order);
   }
-  return best;
+  return order;
 }
 
-function isLegalMove(state: GameState, nextHead: Vec2): boolean {
-  const { boardSize } = state.config;
-  if (nextHead.x < 0 || nextHead.y < 0 || nextHead.x >= boardSize || nextHead.y >= boardSize) {
-    return false;
-  }
-  const isGrowing =
-    (nextHead.x === state.baseApple.x && nextHead.y === state.baseApple.y) ||
-    state.avatarFoods.some((f) => f.pos.x === nextHead.x && f.pos.y === nextHead.y);
-  const bodyToCheck = isGrowing ? state.snake : state.snake.slice(0, -1);
-  return !bodyToCheck.some((seg) => seg.x === nextHead.x && seg.y === nextHead.y);
+interface Candidate {
+  dir: Direction;
+  pos: Vec2;
+  forward: number; // distance ahead of the head along the cycle (1..N-1)
 }
 
-/** Flood-fill from `start` over empty cells (occupied by the snake's body after the move) to estimate escape room. */
-function openSpaceFrom(state: GameState, start: Vec2, bodyAfterMove: Vec2[]): number {
-  const { boardSize } = state.config;
-  const blocked = new Set(bodyAfterMove.map(key));
+function legalCandidates(state: GameState, order: number[], w: number, headOrder: number): Candidate[] {
+  const head = state.snake[0]!;
+  const n = order.length;
+  const bodyWithoutTail = new Set(state.snake.slice(0, -1).map(key));
+  const out: Candidate[] = [];
+  for (const dir of DIRECTIONS) {
+    if (state.snake.length > 1 && dir === OPPOSITE[state.direction]) continue;
+    const v = DIRECTION_VECTORS[dir];
+    const pos = { x: head.x + v.x, y: head.y + v.y };
+    if (pos.x < 0 || pos.y < 0 || pos.x >= state.config.boardSize || pos.y >= state.config.boardSize) continue;
+    if (bodyWithoutTail.has(key(pos))) continue;
+    const forward = (cycleIndex(order, pos, w) - headOrder + n) % n;
+    out.push({ dir, pos, forward });
+  }
+  return out;
+}
+
+/** Reachable empty space from a candidate move — used only as a last-resort
+ * survival heuristic when the cycle successor is somehow blocked. */
+function floodFillFrom(state: GameState, start: Vec2): number {
+  const size = state.config.boardSize;
+  const blocked = new Set(state.snake.slice(0, -1).map(key));
   const seen = new Set<string>([key(start)]);
   const queue: Vec2[] = [start];
   let count = 0;
-
   while (queue.length > 0) {
     const cur = queue.shift()!;
     count++;
-    for (const dir of ALL_DIRECTIONS) {
+    for (const dir of DIRECTIONS) {
       const v = DIRECTION_VECTORS[dir];
-      const next = { x: cur.x + v.x, y: cur.y + v.y };
-      if (next.x < 0 || next.y < 0 || next.x >= boardSize || next.y >= boardSize) continue;
-      const k = key(next);
-      if (seen.has(k) || blocked.has(k)) continue;
-      seen.add(k);
-      queue.push(next);
+      const np = { x: cur.x + v.x, y: cur.y + v.y };
+      if (np.x < 0 || np.y < 0 || np.x >= size || np.y >= size) continue;
+      const kk = key(np);
+      if (seen.has(kk) || blocked.has(kk)) continue;
+      seen.add(kk);
+      queue.push(np);
     }
   }
   return count;
@@ -91,51 +101,69 @@ export function decideMove(
   config: AutopilotConfig = DEFAULT_AUTOPILOT_CONFIG,
   rng: Rng = Math.random
 ): Direction {
-  const head = state.snake[0];
-  const food = nearestFood(state);
-  const forbidden = state.snake.length > 1 ? OPPOSITE[state.direction] : null;
+  void rng;
+  const w = state.config.boardSize;
+  const h = state.config.boardSize;
+  const order = getCycle(w, h);
 
-  const legal = ALL_DIRECTIONS.filter((dir) => dir !== forbidden).filter((dir) => {
-    const v = DIRECTION_VECTORS[dir];
-    return isLegalMove(state, { x: head.x + v.x, y: head.y + v.y });
-  });
+  const head = state.snake[0]!;
+  const tail = state.snake[state.snake.length - 1]!;
 
-  if (legal.length === 0) {
-    // Cornered: no safe move exists. Keep going forward — a real loss.
-    return state.direction;
+  // No cycle available (odd-odd board): survive by maximizing open space.
+  if (!order) return survivalMove(state);
+
+  const n = order.length;
+  const headOrder = cycleIndex(order, head, w);
+  const tailOrder = cycleIndex(order, tail, w);
+  const candidates = legalCandidates(state, order, w, headOrder);
+  if (candidates.length === 0) return state.direction; // trapped — a real loss
+
+  const empty = n - state.snake.length;
+  const distToTail = (tailOrder - headOrder + n) % n;
+
+  // Nearest food measured as forward distance along the cycle.
+  let distToFood = n;
+  for (const food of [state.baseApple, ...state.avatarFoods.map((f) => f.pos)]) {
+    const d = (cycleIndex(order, food, w) - headOrder + n) % n;
+    if (d > 0 && d < distToFood) distToFood = d;
   }
 
-  const distances = legal.map((dir) => {
-    const v = DIRECTION_VECTORS[dir];
-    const nextHead = { x: head.x + v.x, y: head.y + v.y };
-    return { dir, nextHead, dist: manhattan(nextHead, food) };
-  });
-
-  const minDist = Math.min(...distances.map((d) => d.dist));
-  const closest = distances.filter((d) => d.dist === minDist);
-
-  const skipSafetyCheck = rng() < config.riskLevel;
-  if (skipSafetyCheck || closest.length === 1) {
-    return closest[0].dir;
-  }
-
-  // Tie-break by escape room: prefer the candidate that leaves the most
-  // reachable open space, so the bot doesn't greedily wall itself in.
-  let best = closest[0];
-  let bestSpace = -1;
-  for (const candidate of closest) {
-    const isGrowing =
-      (candidate.nextHead.x === state.baseApple.x && candidate.nextHead.y === state.baseApple.y) ||
-      state.avatarFoods.some(
-        (f) => f.pos.x === candidate.nextHead.x && f.pos.y === candidate.nextHead.y
-      );
-    const bodyAfterMove = isGrowing ? state.snake : state.snake.slice(0, -1);
-    const space = openSpaceFrom(state, candidate.nextHead, bodyAfterMove);
-    if (space > bestSpace) {
-      bestSpace = space;
-      best = candidate;
+  // While the board is still roomy, allow shortcuts toward the food. The
+  // safety rule: never advance so far that we'd cut in front of the tail
+  // (leave a growing margin as the board fills), and don't overshoot the food.
+  if (empty > n * config.shortcutWhileEmptierThan) {
+    const margin = 1 + Math.floor((state.snake.length * 3) / n);
+    let best: Candidate | null = null;
+    for (const c of candidates) {
+      if (c.forward === 0) continue;
+      if (c.forward >= distToTail - margin) continue; // stay safely behind the tail
+      if (c.forward > distToFood) continue; // don't jump past the food
+      if (!best || c.forward > best.forward) best = c; // greatest progress toward food
     }
+    if (best) return best.dir;
   }
 
-  return best.dir;
+  // Otherwise follow the Hamiltonian cycle exactly — this is what guarantees
+  // the board eventually fills and the bot wins.
+  const cycleMove = candidates.find((c) => c.forward === 1);
+  if (cycleMove) return cycleMove.dir;
+
+  return survivalMove(state);
+}
+
+function survivalMove(state: GameState): Direction {
+  const head = state.snake[0]!;
+  const size = state.config.boardSize;
+  const bodyWithoutTail = new Set(state.snake.slice(0, -1).map(key));
+  let best: { dir: Direction; space: number } | null = null;
+  for (const dir of DIRECTIONS) {
+    if (state.snake.length > 1 && dir === OPPOSITE[state.direction]) continue;
+    const v = DIRECTION_VECTORS[dir];
+    const pos = { x: head.x + v.x, y: head.y + v.y };
+    if (pos.x < 0 || pos.y < 0 || pos.x >= size || pos.y >= size) continue;
+    if (bodyWithoutTail.has(key(pos))) continue;
+    const space = floodFillFrom(state, pos);
+    if (!best || space > best.space) best = { dir, space };
+  }
+  return best?.dir ?? state.direction;
 }

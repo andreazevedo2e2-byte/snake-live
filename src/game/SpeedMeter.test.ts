@@ -19,12 +19,12 @@ describe("SpeedMeter", () => {
     expect(meter.multiplier).toBeLessThanOrEqual(MAX_MULTIPLIER);
   });
 
-  test("decay reduces the multiplier back toward the minimum over time", () => {
+  test("decay keeps the multiplier stable during the current round", () => {
     let meter = createSpeedMeter();
     for (let i = 0; i < 10; i++) meter = addComment(meter);
     const charged = meter.multiplier;
     meter = decay(meter, 5);
-    expect(meter.multiplier).toBeLessThan(charged);
+    expect(meter.multiplier).toBe(charged);
   });
 
   test("decay never drops the multiplier below the minimum", () => {

@@ -6,6 +6,8 @@ export interface ViewerIdentity {
 
 export interface LeaderboardEntry extends ViewerIdentity {
   score: number;
+  foodCount: number;
+  speedCount: number;
 }
 
 export interface LeaderboardState {
@@ -16,12 +18,22 @@ export function createLeaderboard(): LeaderboardState {
   return { entries: new Map() };
 }
 
-export function creditViewer(state: LeaderboardState, viewer: ViewerIdentity): LeaderboardState {
+export type LeaderboardAction = "food" | "speed" | "comment";
+
+export function creditViewer(
+  state: LeaderboardState,
+  viewer: ViewerIdentity,
+  action: LeaderboardAction = "comment"
+): LeaderboardState {
   const entries = new Map(state.entries);
   const existing = entries.get(viewer.channelId);
+  const foodCount = (existing?.foodCount ?? 0) + (action === "food" ? 1 : 0);
+  const speedCount = (existing?.speedCount ?? 0) + (action === "speed" ? 1 : 0);
   entries.set(viewer.channelId, {
     ...viewer,
     score: (existing?.score ?? 0) + 1,
+    foodCount,
+    speedCount,
   });
   return { entries };
 }

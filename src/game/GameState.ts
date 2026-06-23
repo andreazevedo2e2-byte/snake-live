@@ -49,10 +49,9 @@ function randomEmptyCell(
 }
 
 export function createGame(config: GameConfig, rng: Rng = Math.random): GameState {
-  const mid = Math.floor(config.boardSize / 2);
   const snake: Vec2[] = [
-    { x: mid, y: mid },
-    { x: mid - 1, y: mid },
+    { x: 1, y: 0 },
+    { x: 0, y: 0 },
   ];
   const occupied = new Set(snake.map((s) => `${s.x},${s.y}`));
   const baseApple = randomEmptyCell(config.boardSize, occupied, rng);

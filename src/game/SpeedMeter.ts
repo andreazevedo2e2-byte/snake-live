@@ -1,8 +1,7 @@
-export const MIN_MULTIPLIER = 1.6;
+export const MIN_MULTIPLIER = 1;
 export const MAX_MULTIPLIER = 6;
-const MAX_CHARGE = 30;
-const CHARGE_PER_COMMENT = 3;
-const DECAY_PER_SECOND = 1.5;
+const MAX_CHARGE = 50;
+const CHARGE_PER_COMMENT = 1;
 
 export interface SpeedMeterState {
   charge: number; // 0..MAX_CHARGE
@@ -10,8 +9,7 @@ export interface SpeedMeterState {
 }
 
 function multiplierForCharge(charge: number): number {
-  const ratio = charge / MAX_CHARGE;
-  return MIN_MULTIPLIER + (MAX_MULTIPLIER - MIN_MULTIPLIER) * ratio;
+  return Math.min(MAX_MULTIPLIER, MIN_MULTIPLIER + charge * 0.1);
 }
 
 export function createSpeedMeter(): SpeedMeterState {
@@ -24,6 +22,6 @@ export function addComment(state: SpeedMeterState): SpeedMeterState {
 }
 
 export function decay(state: SpeedMeterState, dtSeconds: number): SpeedMeterState {
-  const charge = Math.max(0, state.charge - DECAY_PER_SECOND * dtSeconds);
-  return { charge, multiplier: multiplierForCharge(charge) };
+  void dtSeconds;
+  return state;
 }

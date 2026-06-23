@@ -1,128 +1,95 @@
-import { describe, test, expect } from "vitest";
+import { describe, expect, test } from "vitest";
 import { decideMove } from "./decideMove";
-import { createGame } from "../game/GameState";
+import { createGame, setDirection, tick } from "../game/GameState";
 import type { GameConfig, GameState } from "../game/types";
 
-const cfg: GameConfig = { boardSize: 12, maxAvatarFoods: 8 };
-
-function rngSeq(values: number[]): () => number {
-  let i = 0;
-  return () => values[Math.min(i++, values.length - 1)];
-}
+const cfg: GameConfig = { boardSize: 10, maxAvatarFoods: 8 };
 
 function withState(overrides: Partial<GameState>): GameState {
   const base = createGame(cfg, () => 0);
   return { ...base, status: "playing", ...overrides };
 }
 
-describe("decideMove — basic safety", () => {
-  test("never walks into a wall when a safe alternative exists", () => {
+describe("decideMove — natural early play", () => {
+  test("eats food sitting right next to the head instead of passing it by", () => {
     const state = withState({
+      snake: [
+        { x: 2, y: 2 },
+        { x: 1, y: 2 },
+      ],
       direction: "right",
-      snake: [{ x: 0, y: 5 }, { x: 1, y: 5 }],
-      baseApple: { x: 11, y: 11 },
+      baseApple: { x: 3, y: 2 }, // directly to the right of the head
     });
-    const move = decideMove(state);
-    expect(move).not.toBe("left"); // would step to x=-1
+    expect(decideMove(state)).toBe("right");
   });
 
-  test("never walks into its own body when a safe alternative exists", () => {
-    // Snake forms an L; stepping "down" from the head would hit the body,
-    // but "right" is open and safe.
+  test("heads toward food that is a few cells away on an open board", () => {
     const state = withState({
+      snake: [
+        { x: 2, y: 2 },
+        { x: 1, y: 2 },
+      ],
       direction: "right",
+      baseApple: { x: 6, y: 2 },
+    });
+    // The move must strictly reduce the Manhattan distance to the food.
+    const before = Math.abs(2 - 6) + Math.abs(2 - 2);
+    const next = tick(setDirection(state, decideMove(state)));
+    const head = next.snake[0]!;
+    const after = Math.abs(head.x - 6) + Math.abs(head.y - 2);
+    expect(after).toBeLessThan(before);
+  });
+
+  test("never reverses into its own neck", () => {
+    const state = withState({
+      snake: [
+        { x: 2, y: 2 },
+        { x: 1, y: 2 },
+      ],
+      direction: "right",
+      baseApple: { x: 0, y: 2 },
+    });
+    expect(decideMove(state)).not.toBe("left");
+  });
+
+  test("returns a non-deadly move whenever any safe move exists", () => {
+    const state = withState({
       snake: [
         { x: 5, y: 5 },
         { x: 5, y: 6 },
-        { x: 6, y: 6 },
-        { x: 6, y: 5 },
+        { x: 4, y: 6 },
+        { x: 4, y: 5 },
       ],
-      baseApple: { x: 11, y: 11 },
-    });
-    const move = decideMove(state);
-    expect(move).not.toBe("down");
-  });
-});
-
-describe("decideMove — seeks food", () => {
-  test("moves toward the base apple when the path is clear", () => {
-    const state = withState({
-      direction: "right",
-      snake: [{ x: 5, y: 5 }, { x: 4, y: 5 }],
-      baseApple: { x: 9, y: 5 },
-    });
-    const move = decideMove(state);
-    expect(move).toBe("right");
-  });
-
-  test("moves vertically toward the apple when that is the only open dimension", () => {
-    const state = withState({
       direction: "up",
-      snake: [{ x: 5, y: 5 }, { x: 5, y: 6 }],
-      baseApple: { x: 5, y: 0 },
+      baseApple: { x: 0, y: 0 },
     });
-    const move = decideMove(state);
-    expect(move).toBe("up");
+    const dir = decideMove(state);
+    const next = tick(setDirection(state, dir));
+    expect(next.status).not.toBe("lost");
   });
 });
 
-describe("decideMove — escape-room awareness (riskLevel 0)", () => {
-  test("prefers the equally-close candidate that leaves more open space", () => {
-    // Head at (5,5). Apple straight below far away so both "down" and a
-    // same-distance detour are candidates; "left" walks into a 1-cell pocket
-    // formed by the snake's own body, "down" stays in the open board.
-    const state = withState({
-      direction: "down",
-      snake: [
-        { x: 5, y: 5 },
-        { x: 6, y: 5 },
-        { x: 6, y: 4 },
-        { x: 5, y: 4 },
-        { x: 4, y: 4 },
-        { x: 4, y: 5 },
-        { x: 4, y: 6 },
-      ],
-      baseApple: { x: 5, y: 9 },
-    });
-    const move = decideMove(state, { riskLevel: 0 });
-    expect(move).toBe("down");
-  });
-});
+/** Plays a full no-chat game to completion, autopilot driving every tick. */
+function playToEnd(boardSize: number): "win" | "loss" | "stall" {
+  let state: GameState = {
+    ...createGame({ boardSize, maxAvatarFoods: 0 }),
+    status: "playing",
+  };
+  const cap = boardSize * boardSize * 80;
+  for (let t = 0; t < cap; t++) {
+    state = tick(setDirection(state, decideMove(state)));
+    if (state.status === "victory") return "win";
+    if (state.status === "lost") return "loss";
+  }
+  return "stall";
+}
 
-describe("decideMove — dosed imperfection (riskLevel)", () => {
-  test("can skip the escape-room safety check when the risk roll triggers", () => {
-    const state = withState({
-      direction: "down",
-      snake: [
-        { x: 5, y: 5 },
-        { x: 6, y: 5 },
-        { x: 6, y: 4 },
-        { x: 5, y: 4 },
-        { x: 4, y: 4 },
-        { x: 4, y: 5 },
-        { x: 4, y: 6 },
-      ],
-      baseApple: { x: 5, y: 9 },
-    });
-    // rng() always returns 0, which is < any positive riskLevel, forcing the
-    // "skip safety" branch deterministically for this test.
-    const move = decideMove(state, { riskLevel: 1 }, rngSeq([0]));
-    expect(["down", "left", "right"]).toContain(move);
-  });
-});
-
-describe("decideMove — no legal move", () => {
-  test("returns a direction without throwing even when fully cornered", () => {
-    const state = withState({
-      direction: "right",
-      snake: [
-        { x: 1, y: 0 },
-        { x: 0, y: 0 },
-        { x: 0, y: 1 },
-        { x: 1, y: 1 },
-      ],
-      baseApple: { x: 11, y: 11 },
-    });
-    expect(() => decideMove(state)).not.toThrow();
+describe("decideMove — guaranteed completion", () => {
+  test("fills the board and wins every game across several board sizes", () => {
+    for (const size of [6, 8, 10]) {
+      for (let game = 0; game < 6; game++) {
+        expect(playToEnd(size)).toBe("win");
+      }
+    }
   });
 });

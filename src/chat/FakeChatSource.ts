@@ -1,4 +1,4 @@
-import type { ChatEvent, EventSource } from "./types";
+﻿import type { ChatEvent, EventSource } from "./types";
 
 const FAKE_AUTHORS = [
   "Ana", "Bruno", "Carla", "Diego", "Elena", "Felix",
@@ -6,18 +6,18 @@ const FAKE_AUTHORS = [
 ];
 
 const FAKE_MESSAGES = [
-  "go go go!",
-  "left left left",
-  "nooo almost",
-  "let's go",
-  "🔥🔥🔥",
-  "you got this",
-  "watch the wall!",
-  "gg",
+  "food",
+  "add food",
+  "speed",
+  "food food",
+  "speed please",
+  "add",
+  "food",
+  "speed",
 ];
 
 /** Pure, deterministic generator used both by FakeChatSource's timer loop and
- * by tests — same index always produces the same fake comment. */
+ * by tests â€” same index always produces the same fake comment. */
 export function nextFakeChatEvent(index: number): ChatEvent {
   const author = FAKE_AUTHORS[index % FAKE_AUTHORS.length];
   const text = FAKE_MESSAGES[index % FAKE_MESSAGES.length];
@@ -64,3 +64,4 @@ export class FakeChatSource implements EventSource {
     this.handlers.push(handler);
   }
 }
+
