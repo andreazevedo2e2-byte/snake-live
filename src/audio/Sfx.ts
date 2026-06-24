@@ -1,23 +1,22 @@
 import { Howl, Howler } from "howler";
 
-type SoundName = "turn" | "move" | "eat" | "boost" | "victoryClick" | "lost";
+type SoundName = "turn" | "eat" | "boost" | "victory" | "lost";
+const DEFAULT_MASTER_VOLUME = 0.6;
 
 const SOUND_URLS: Record<SoundName, string[]> = {
   turn: ["/assets/sfx/keyboard/keypress.wav"],
-  move: ["/assets/sfx/snake/move.wav"],
-  eat: ["/assets/sfx/snake/eat.ogg"],
+  eat: ["/assets/sfx/custom/minecraft-eat.mp3"],
   boost: ["/assets/sfx/kenney/boost.wav"],
-  victoryClick: ["/assets/sfx/kenney/victory-click.wav"],
+  victory: ["/assets/sfx/custom/victory-hok.mp3"],
   lost: ["/assets/sfx/snake/lost.ogg"],
 };
 
 const VOLUMES: Record<SoundName, number> = {
-  turn: 0.18,
-  move: 0.08,
-  eat: 0.38,
-  boost: 0.34,
-  victoryClick: 0.34,
-  lost: 0.42,
+  turn: 1,
+  eat: 1,
+  boost: 1,
+  victory: 1,
+  lost: 1,
 };
 
 export class Sfx {
@@ -25,6 +24,7 @@ export class Sfx {
   private sounds = new Map<SoundName, Howl>();
 
   constructor() {
+    Howler.volume(DEFAULT_MASTER_VOLUME);
     for (const [name, urls] of Object.entries(SOUND_URLS) as Array<[SoundName, string[]]>) {
       this.sounds.set(
         name,
@@ -47,12 +47,16 @@ export class Sfx {
     if (ctx.state === "suspended") void ctx.resume();
   }
 
+  setMasterVolume(value: number): void {
+    Howler.volume(Math.max(0, Math.min(1, value)));
+  }
+
   turn(): void {
     this.play("turn", () => this.tone(420, 35, "square", 0.05));
   }
 
   move(): void {
-    this.arcadeChomp(0.035);
+    // Intentionally silent: continuous movement audio was too busy for live viewing.
   }
 
   startClick(): void {
@@ -89,9 +93,10 @@ export class Sfx {
   }
 
   victory(): void {
-    this.say("Victory!");
-    [0, 115, 230, 345].forEach((delay) => {
-      setTimeout(() => this.play("victoryClick", () => this.tone(784 + delay, 160, "triangle", 0.14)), delay);
+    this.play("victory", () => {
+      [523, 659, 784, 1046].forEach((freq, i) => {
+        setTimeout(() => this.tone(freq, 220, "triangle", 0.14), i * 120);
+      });
     });
   }
 
@@ -147,14 +152,4 @@ export class Sfx {
     osc.stop(ctx.currentTime + 0.085);
   }
 
-  private say(text: string): void {
-    if (!("speechSynthesis" in window)) return;
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "en-US";
-    utterance.rate = 1.08;
-    utterance.pitch = 1.15;
-    utterance.volume = 0.85;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
-  }
 }

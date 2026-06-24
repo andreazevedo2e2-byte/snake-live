@@ -1,15 +1,18 @@
 <!doctype html>
-<html lang="en">
+<html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Snake Live</title>
     <style>
       html, body {
+        --snake-accent-hue: 205;
         margin: 0;
         padding: 0;
         background:
-          radial-gradient(circle at 50% 18%, rgba(116, 255, 24, 0.13), transparent 24%),
+          radial-gradient(circle at 50% 18%, hsla(var(--snake-accent-hue), 95%, 58%, 0.2), transparent 24%),
+          linear-gradient(90deg, hsla(var(--snake-accent-hue), 92%, 22%, 0.72), transparent 22%, transparent 78%, hsla(var(--snake-accent-hue), 92%, 22%, 0.72)),
+          linear-gradient(180deg, hsla(var(--snake-accent-hue), 85%, 10%, 0.38), transparent 45%, hsla(var(--snake-accent-hue), 85%, 10%, 0.38)),
           linear-gradient(180deg, #020403 0%, #040804 100%);
         height: 100%;
         overflow: hidden;
@@ -26,12 +29,263 @@
         max-height: 100vh;
         aspect-ratio: 9 / 16;
         image-rendering: auto;
-        filter: drop-shadow(0 0 22px rgba(116, 255, 24, 0.18));
+        filter: drop-shadow(0 0 22px hsla(var(--snake-accent-hue), 95%, 58%, 0.22));
+      }
+      #volume-toggle {
+        position: fixed;
+        top: max(12px, calc(50vh - min(50vh, 88.889vw) + 28px));
+        left: calc(50vw + min(28.125vh, 50vw) - 100px);
+        width: 42px;
+        height: 42px;
+        z-index: 11;
+        border: 0;
+        padding: 0;
+        background: transparent;
+        cursor: pointer;
+      }
+      #volume-control {
+        position: fixed;
+        top: max(12px, calc(50vh - min(50vh, 88.889vw) + 72px));
+        left: calc(50vw + min(28.125vh, 50vw) - min(210px, 44vw) - 18px);
+        width: min(210px, 44vw);
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px;
+        border: 1px solid rgba(105, 210, 12, 0.7);
+        border-radius: 6px;
+        background: rgba(5, 9, 5, 0.78);
+        color: #ffffff;
+        font: 800 11px Arial, Helvetica, sans-serif;
+        letter-spacing: 0.06em;
+        box-shadow: 0 0 14px rgba(116, 255, 24, 0.14);
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(-6px);
+        transition: opacity 140ms ease, transform 140ms ease;
+      }
+      #volume-control.is-open {
+        opacity: 1;
+        pointer-events: auto;
+        transform: translateY(0);
+      }
+      #volume-control input {
+        width: 100%;
+        accent-color: #a9ff12;
+      }
+      #volume-value {
+        min-width: 30px;
+        color: #a9ff12;
+        text-align: right;
+      }
+      #settings-toggle {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        z-index: 12;
+        width: 24px;
+        height: 24px;
+        border: 1px solid rgba(105, 210, 12, 0.14);
+        border-radius: 999px;
+        background: rgba(5, 9, 5, 0.26);
+        color: rgba(183, 255, 77, 0.62);
+        font: 900 12px Arial, Helvetica, sans-serif;
+        padding: 0;
+        cursor: pointer;
+        backdrop-filter: blur(2px);
+        opacity: 0.78;
+      }
+      #settings-panel {
+        position: fixed;
+        top: max(60px, calc(50vh - min(50vh, 88.889vw) + 74px));
+        left: calc(50vw - min(28.125vh, 50vw) + 20px);
+        width: min(290px, 42vw);
+        max-height: min(720px, 74vh);
+        overflow: auto;
+        z-index: 12;
+        border: 1px solid rgba(105, 210, 12, 0.72);
+        border-radius: 8px;
+        background: rgba(5, 9, 5, 0.94);
+        color: #f6ffe7;
+        padding: 12px;
+        box-shadow: 0 0 20px rgba(116, 255, 24, 0.16);
+        display: none;
+        font: 800 12px Arial, Helvetica, sans-serif;
+      }
+      #settings-panel.is-open {
+        display: block;
+      }
+      #settings-panel h2 {
+        margin: 0 0 10px;
+        color: #c8ff53;
+        font: 900 14px Arial, Helvetica, sans-serif;
+        letter-spacing: 0.08em;
+      }
+      .settings-grid {
+        display: grid;
+        gap: 10px;
+      }
+      .settings-grid label,
+      .settings-grid fieldset {
+        display: grid;
+        gap: 6px;
+        border: 0;
+        margin: 0;
+        padding: 0;
+      }
+      .settings-grid span,
+      .settings-grid legend {
+        color: #9bf942;
+        font-size: 11px;
+        letter-spacing: 0.06em;
+      }
+      .settings-grid select,
+      .settings-grid input[type="number"],
+      .settings-grid input[type="range"] {
+        width: 100%;
+        box-sizing: border-box;
+        border-radius: 6px;
+        border: 1px solid rgba(105, 210, 12, 0.45);
+        background: rgba(15, 25, 12, 0.95);
+        color: #ffffff;
+        padding: 7px 8px;
+      }
+      .settings-grid input[type="checkbox"] {
+        accent-color: #b7ff4d;
+      }
+      .settings-grid .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .settings-grid .checks {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px 10px;
+      }
+      .settings-grid .checks label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: #f3ffd4;
+      }
+      #settings-apply {
+        border: 0;
+        border-radius: 6px;
+        background: #b7ff4d;
+        color: #051005;
+        padding: 10px 12px;
+        font: 900 12px Arial, Helvetica, sans-serif;
+        letter-spacing: 0.08em;
+        cursor: pointer;
+      }
+      .settings-note {
+        color: rgba(242, 255, 220, 0.72);
+        font-size: 10px;
+        line-height: 1.4;
       }
     </style>
   </head>
   <body>
     <div id="app"></div>
+    <button id="settings-toggle" type="button" aria-label="Abrir configurações">&#9881;</button>
+    <form id="settings-panel">
+      <h2>CONFIGURAÇÕES</h2>
+      <div class="settings-grid">
+        <label>
+          <span>Mapa</span>
+          <select id="setting-map">
+            <option value="classic">Clássico</option>
+            <option value="heart">Coração</option>
+            <option value="brazil">Bandeira do Brasil</option>
+            <option value="creeper">Creeper</option>
+          </select>
+        </label>
+        <label>
+          <span>Modo</span>
+          <select id="setting-mode">
+            <option value="classic">Clássico</option>
+            <option value="full_food">Mapa cheio</option>
+            <option value="maze_race">Labirinto final</option>
+            <option value="maze_harvest">Labirinto contínuo</option>
+            <option value="pudding">Blocos dinâmicos</option>
+          </select>
+        </label>
+        <label>
+          <span>Cores</span>
+          <select id="setting-colors">
+            <option value="gradient">Gradiente da cobra</option>
+            <option value="map">Cores do mapa</option>
+          </select>
+        </label>
+        <label>
+          <span>Estilo da cobra</span>
+          <select id="setting-snake">
+            <option value="smooth">Suave</option>
+            <option value="google">Google Snake</option>
+          </select>
+        </label>
+        <label>
+          <span>Comment speed</span>
+          <select id="setting-comment-speed-mode">
+            <option value="gradual">Aumentar gradualmente</option>
+            <option value="fixed">Travar no valor inicial</option>
+          </select>
+        </label>
+        <label>
+          <span>Valor inicial do speed</span>
+          <input id="setting-comment-speed-start" type="range" min="1" max="6" step="0.1" value="1" />
+        </label>
+        <fieldset>
+          <legend>Comidas</legend>
+          <div class="checks">
+            <label><input id="food-apple-red" type="checkbox" checked />Maçã vermelha</label>
+            <label><input id="food-apple-gold" type="checkbox" />Maçã dourada</label>
+            <label><input id="food-bread" type="checkbox" />Pão</label>
+            <label><input id="food-watermelon" type="checkbox" />Melancia</label>
+          </div>
+        </fieldset>
+        <div class="row">
+          <label>
+            <span>Largura inicial</span>
+            <input id="setting-width" type="number" min="8" max="28" step="1" value="10" />
+          </label>
+          <label>
+            <span>Altura inicial</span>
+            <input id="setting-height" type="number" min="6" max="20" step="1" value="8" />
+          </label>
+        </div>
+        <label>
+          <span>Modo crescimento</span>
+          <div class="checks">
+            <label><input id="setting-growth" type="checkbox" />Aumentar o mapa após cada vitória</label>
+          </div>
+        </label>
+        <label>
+          <span>Velocidade base</span>
+          <input id="setting-speed" type="range" min="0.6" max="2.4" step="0.1" value="1" />
+        </label>
+        <label>
+          <span>Velocidade do gradiente</span>
+          <input id="setting-gradient" type="range" min="0.01" max="0.12" step="0.01" value="0.04" />
+        </label>
+        <label>
+          <span>Taxa de erro</span>
+          <input id="setting-errors" type="range" min="0" max="100" step="1" value="20" />
+        </label>
+        <div class="settings-note">
+          Mapa cheio preenche tudo com comida. Labirinto final leva a uma fruta-alvo. Blocos dinâmicos criam obstáculos novos durante a partida.
+        </div>
+        <button id="settings-apply" type="submit">APLICAR E REINICIAR</button>
+      </div>
+    </form>
+    <button id="volume-toggle" type="button" aria-label="Toggle game volume"></button>
+    <label id="volume-control">
+      VOL
+      <input id="volume-slider" type="range" min="0" max="100" value="60" />
+      <span id="volume-value">60%</span>
+    </label>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

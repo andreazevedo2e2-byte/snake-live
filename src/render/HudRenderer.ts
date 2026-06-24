@@ -29,6 +29,9 @@ export class HudRenderer {
   private chrome = new Graphics();
   private subsText: Text;
   private winsText: Text;
+  private breadsText: Text;
+  private timerText: Text;
+  private levelText: Text;
   private speedBarFill: Graphics;
   private speedNeedle: Graphics;
   private speedLabel: Text;
@@ -55,14 +58,22 @@ export class HudRenderer {
     this.winsText.x = 420;
     this.winsText.y = 41;
 
-    const controls = label("🔊   ⛶", 34);
-    controls.x = 800;
-    controls.y = 38;
+    this.breadsText = label("BREAD 0", 24, COLORS.heroGold);
+    this.breadsText.x = 610;
+    this.breadsText.y = 44;
 
-    const command = label("COMMENT →", 26, COLORS.hudMuted);
+    this.timerText = label("00:00.000", 24, COLORS.hud);
+    this.timerText.x = 724;
+    this.timerText.y = 43;
+
+    this.levelText = label("LV 1", 22, COLORS.hudMuted);
+    this.levelText.x = 940;
+    this.levelText.y = 46;
+
+    const command = label("COMMENT", 26, COLORS.hudMuted);
     command.x = 64;
     command.y = 128;
-    const commandBody = label("FOOD + SPEED", 38, COLORS.heroGold);
+    const commandBody = label("FOOD OR SPEED", 35, COLORS.heroGold);
     commandBody.x = 64;
     commandBody.y = 176;
 
@@ -82,25 +93,30 @@ export class HudRenderer {
     objectiveBody.x = 742;
     objectiveBody.y = 178;
 
-    const speedTitle = label("SPEED", 24);
+    const speedTitle = label("COMMENT SPEED", 22);
     speedTitle.x = 64;
     speedTitle.y = 292;
     this.speedLabel = label(`x${MIN_MULTIPLIER.toFixed(1)}`, 30, COLORS.speedBarFill);
-    this.speedLabel.x = 168;
+    this.speedLabel.x = 305;
     this.speedLabel.y = 288;
     this.speedBarFill = new Graphics();
     this.speedNeedle = new Graphics();
 
+    // Positions follow the exact same linear ratio as the fill bar in
+    // setSpeed (value - MIN) / (MAX - MIN) — otherwise the labels drift out
+    // of sync with where the fill actually reaches at a given multiplier.
+    const speedBarPosition = (value: number): number =>
+      LAYOUT.speedBar.x + ((value - MIN_MULTIPLIER) / (MAX_MULTIPLIER - MIN_MULTIPLIER)) * LAYOUT.speedBar.width;
     const tiers = [
-      { x: 340, text: "x1", color: COLORS.hudMuted },
-      { x: 470, text: "x2", color: 0x42ddff },
-      { x: 600, text: "x3", color: COLORS.speedBarFill },
-      { x: 730, text: "x4", color: COLORS.heroGold },
-      { x: 865, text: "x6", color: COLORS.speedBarHot },
+      { value: 1, text: "x1", color: COLORS.hudMuted },
+      { value: 2, text: "x2", color: 0x42ddff },
+      { value: 3, text: "x3", color: COLORS.speedBarFill },
+      { value: 4, text: "x4", color: COLORS.heroGold },
+      { value: 6, text: "x6", color: COLORS.speedBarHot },
     ];
     const tierTexts = tiers.map((tier) => {
       const t = label(tier.text, 28, tier.color);
-      t.x = tier.x;
+      t.x = speedBarPosition(tier.value) + 10;
       t.y = 287;
       return t;
     });
@@ -122,7 +138,9 @@ export class HudRenderer {
       live,
       this.subsText,
       this.winsText,
-      controls,
+      this.breadsText,
+      this.timerText,
+      this.levelText,
       command,
       commandBody,
       chatTitle,
@@ -157,9 +175,24 @@ export class HudRenderer {
     }
   }
 
-  setCounters({ subscribers, victories }: { subscribers: number; victories: number }): void {
+  setCounters({
+    subscribers,
+    victories,
+    breads,
+    timer,
+    level,
+  }: {
+    subscribers: number;
+    victories: number;
+    breads: number;
+    timer: string;
+    level: number;
+  }): void {
     this.subsText.text = `SUBS ${subscribers.toLocaleString("en-US")}`;
     this.winsText.text = `WINS ${victories.toLocaleString("en-US")}`;
+    this.breadsText.text = `BREAD ${breads.toLocaleString("en-US")}`;
+    this.timerText.text = timer;
+    this.levelText.text = `LV ${level}`;
   }
 
   setSpeed(multiplier: number): void {

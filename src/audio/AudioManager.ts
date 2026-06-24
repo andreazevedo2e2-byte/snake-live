@@ -19,6 +19,10 @@ export class AudioManager {
     this.music.stop();
   }
 
+  setVolume(value: number): void {
+    this.sfx.setMasterVolume(value);
+  }
+
   onTurn(): void {
     this.sfx.turn();
   }

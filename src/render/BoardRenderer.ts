@@ -1,8 +1,9 @@
 import { Container, Graphics, Sprite, Texture } from "pixi.js";
-import type { AvatarFood, Direction, GameState, Vec2 } from "../game/types";
+import type { BoardFood, Direction, FoodType, GameState, Vec2 } from "../game/types";
 import { hueForLength, lerpHue } from "../game/colorHue";
 import { LAYOUT, COLORS } from "./layout";
 import { TextureCache } from "./TextureCache";
+import { mapCellColor } from "./mapThemes";
 
 const START_SNAKE_LENGTH = 2;
 const HUE_LERP_SPEED = 0.04;
@@ -28,9 +29,25 @@ function hueToRgb(hue: number, saturation = 0.68, lightness = 0.55): number {
   return (toByte(r) << 16) | (toByte(g) << 8) | toByte(b);
 }
 
+function mixRgb(a: number, b: number, amount: number): number {
+  const t = Math.max(0, Math.min(1, amount));
+  const ar = (a >> 16) & 0xff;
+  const ag = (a >> 8) & 0xff;
+  const ab = a & 0xff;
+  const br = (b >> 16) & 0xff;
+  const bg = (b >> 8) & 0xff;
+  const bb = b & 0xff;
+  const rr = Math.round(ar + (br - ar) * t);
+  const rg = Math.round(ag + (bg - ag) * t);
+  const rb = Math.round(ab + (bb - ab) * t);
+  return (rr << 16) | (rg << 8) | rb;
+}
+
 export class BoardRenderer {
   readonly view = new Container();
   private backgroundLayer = new Graphics();
+  private mapLayer = new Graphics();
+  private wallLayer = new Graphics();
   private gridLayer = new Graphics();
   private foodLayer = new Container();
   private snakeGlowLayer = new Container();
@@ -38,6 +55,8 @@ export class BoardRenderer {
   private snakeLayer = new Container();
   private faceLayer = new Graphics();
   private cellSize: number;
+  private boardPixelWidth: number;
+  private boardPixelHeight: number;
   private displayedHue = 0;
   private previousSnake: Vec2[] = [];
   private currentSnake: Vec2[] = [];
@@ -49,17 +68,26 @@ export class BoardRenderer {
   >();
   private segmentPool: Graphics[] = [];
   private segmentGlowPool: Graphics[] = [];
-  private apple: Graphics;
+  private basicFoodSprites = new Map<string, Sprite>();
 
   constructor(
-    boardSize: number,
-    private avatarCache: TextureCache<Texture>
+    boardWidth: number,
+    boardHeight: number,
+    private avatarCache: TextureCache<Texture>,
+    private foodTextures: Record<FoodType, Texture>,
   ) {
-    this.cellSize = LAYOUT.board.size / boardSize;
-    this.view.x = LAYOUT.board.x;
-    this.view.y = LAYOUT.board.y;
+    // Board cells stay square; size them to fill the wider axis, then center
+    // the (possibly shorter) board vertically within the layout's square
+    // budget so a non-square board doesn't look like a cropped square.
+    this.cellSize = LAYOUT.board.size / Math.max(boardWidth, boardHeight);
+    this.boardPixelWidth = this.cellSize * boardWidth;
+    this.boardPixelHeight = this.cellSize * boardHeight;
+    this.view.x = LAYOUT.board.x + (LAYOUT.board.size - this.boardPixelWidth) / 2;
+    this.view.y = LAYOUT.board.y + (LAYOUT.board.size - this.boardPixelHeight) / 2;
     this.view.addChild(
       this.backgroundLayer,
+      this.mapLayer,
+      this.wallLayer,
       this.gridLayer,
       this.foodLayer,
       this.snakeGlowLayer,
@@ -67,15 +95,12 @@ export class BoardRenderer {
       this.snakeLayer,
       this.faceLayer
     );
-
-    this.apple = new Graphics();
     this.drawBackground();
     this.drawGrid();
-    this.drawApple();
-    this.foodLayer.addChild(this.apple);
   }
 
   update(state: GameState, speedMultiplier = 1): void {
+    this.drawWalls(state);
     this.renderFoods(state);
     this.updateSnakeAnimation(state, speedMultiplier);
     this.renderSnake(state);
@@ -91,59 +116,84 @@ export class BoardRenderer {
     this.snakeAnimationMs = Math.max(90, 320 / speedMultiplier);
   }
 
-  private drawBackground(): void {
+  private drawBackground(accentColor: number = COLORS.boardWall, accentHue = 205): void {
+    this.drawDynamicBackground(accentColor, accentHue);
+  }
+
+  private drawClassicBackground(): void {
+    const w = this.boardPixelWidth;
+    const h = this.boardPixelHeight;
     this.backgroundLayer
       .clear()
-      .roundRect(-11, -11, LAYOUT.board.size + 22, LAYOUT.board.size + 22, 12)
-      .fill({ color: COLORS.boardWallShadow, alpha: 0.9 })
-      .roundRect(-5, -5, LAYOUT.board.size + 10, LAYOUT.board.size + 10, 9)
+      .roundRect(-11, -11, w + 22, h + 22, 12)
+      .fill({ color: COLORS.boardWall, alpha: 0.22 })
+      .roundRect(-5, -5, w + 10, h + 10, 9)
       .fill(COLORS.boardWall)
-      .rect(0, 0, LAYOUT.board.size, LAYOUT.board.size)
+      .roundRect(-5, -5, w + 10, h + 10, 9)
+      .stroke({ width: 4, color: COLORS.boardWall, alpha: 0.95 })
+      .rect(0, 0, w, h)
       .fill(COLORS.boardBackground);
 
-    const bandHeight = LAYOUT.board.size / 4;
+    const bandHeight = h / 4;
     for (let i = 0; i < 4; i++) {
       this.backgroundLayer
-        .rect(0, i * bandHeight, LAYOUT.board.size, bandHeight)
-        .fill({ color: i % 2 === 0 ? COLORS.boardBandA : COLORS.boardBandB, alpha: 0.24 + i * 0.06 });
+        .rect(0, i * bandHeight, w, bandHeight)
+        .fill({ color: i % 2 === 0 ? COLORS.boardBandA : COLORS.boardBandB, alpha: 0.2 + i * 0.04 });
     }
 
     this.backgroundLayer
-      .circle(LAYOUT.board.size * 0.18, LAYOUT.board.size * 0.7, LAYOUT.board.size * 0.12)
-      .fill({ color: COLORS.boardWall, alpha: 0.08 })
-      .circle(LAYOUT.board.size * 0.82, LAYOUT.board.size * 0.18, LAYOUT.board.size * 0.1)
-      .fill({ color: COLORS.boardWall, alpha: 0.08 })
-      .ellipse(LAYOUT.board.size * 0.55, LAYOUT.board.size * 0.92, LAYOUT.board.size * 0.22, LAYOUT.board.size * 0.07)
-      .fill({ color: COLORS.boardWall, alpha: 0.06 });
+      .circle(w * 0.18, h * 0.7, Math.min(w, h) * 0.12)
+      .fill({ color: COLORS.boardWall, alpha: 0.06 })
+      .circle(w * 0.82, h * 0.18, Math.min(w, h) * 0.1)
+      .fill({ color: COLORS.boardWall, alpha: 0.06 })
+      .ellipse(w * 0.55, h * 0.92, w * 0.22, h * 0.07)
+      .fill({ color: COLORS.boardWall, alpha: 0.05 });
   }
 
-  private drawGrid(): void {
+  private drawDynamicBackground(accentColor: number = COLORS.boardWall, accentHue = 205): void {
+    const w = this.boardPixelWidth;
+    const h = this.boardPixelHeight;
+    const boardBase = hueToRgb(accentHue, 0.68, 0.1);
+    const bandA = hueToRgb((accentHue + 8) % 360, 0.62, 0.15);
+    const bandB = hueToRgb((accentHue + 22) % 360, 0.7, 0.2);
+    this.backgroundLayer
+      .clear()
+      .roundRect(-11, -11, w + 22, h + 22, 12)
+      .fill({ color: accentColor, alpha: 0.28 })
+      .roundRect(-5, -5, w + 10, h + 10, 9)
+      .fill(accentColor)
+      .roundRect(-5, -5, w + 10, h + 10, 9)
+      .stroke({ width: 4, color: accentColor, alpha: 0.96 })
+      .rect(0, 0, w, h)
+      .fill(boardBase);
+
+    const bandHeight = h / 4;
+    for (let i = 0; i < 4; i++) {
+      this.backgroundLayer
+        .rect(0, i * bandHeight, w, bandHeight)
+        .fill({ color: i % 2 === 0 ? bandA : bandB, alpha: 0.25 + i * 0.055 });
+    }
+
+    this.backgroundLayer
+      .circle(w * 0.18, h * 0.7, Math.min(w, h) * 0.12)
+      .fill({ color: accentColor, alpha: 0.08 })
+      .circle(w * 0.82, h * 0.18, Math.min(w, h) * 0.1)
+      .fill({ color: accentColor, alpha: 0.08 })
+      .ellipse(w * 0.55, h * 0.92, w * 0.22, h * 0.07)
+      .fill({ color: accentColor, alpha: 0.06 });
+  }
+
+  private drawGrid(accentColor: number = COLORS.gridLine): void {
     this.gridLayer.clear();
     this.gridLayer
-      .rect(18, 18, LAYOUT.board.size - 36, LAYOUT.board.size - 36)
-      .stroke({ width: 2, color: COLORS.gridLine, alpha: 0.12 });
-  }
-
-  private drawApple(): void {
-    const c = this.cellSize / 2;
-    this.apple
-      .clear()
-      .circle(c + 2, c + 5, this.cellSize * 0.34)
-      .fill(COLORS.baseAppleDark)
-      .circle(c - 2, c, this.cellSize * 0.33)
-      .fill(COLORS.baseApple)
-      .ellipse(c - 10, c - 10, this.cellSize * 0.08, this.cellSize * 0.13)
-      .fill({ color: COLORS.hud, alpha: 0.45 })
-      .ellipse(c + 15, c - 26, this.cellSize * 0.15, this.cellSize * 0.08)
-      .fill(0x4fe04e)
-      .rect(c + 2, c - 31, 5, 18)
-      .fill(0x5b2e16);
+      .rect(18, 18, this.boardPixelWidth - 36, this.boardPixelHeight - 36)
+      .stroke({ width: 2, color: accentColor, alpha: 0.16 });
   }
 
   private getSegment(index: number): Graphics {
     let seg = this.segmentPool[index];
     if (!seg) {
-      seg = new Graphics().circle(0, 0, this.cellSize * 0.33).fill(0xffffff);
+      seg = new Graphics();
       this.segmentPool[index] = seg;
       this.snakeLayer.addChild(seg);
     }
@@ -153,7 +203,7 @@ export class BoardRenderer {
   private getGlow(index: number): Graphics {
     let glow = this.segmentGlowPool[index];
     if (!glow) {
-      glow = new Graphics().circle(0, 0, this.cellSize * 0.41).fill({ color: 0xffffff, alpha: 0.22 });
+      glow = new Graphics();
       this.segmentGlowPool[index] = glow;
       this.snakeGlowLayer.addChild(glow);
     }
@@ -162,48 +212,70 @@ export class BoardRenderer {
 
   private renderSnake(state: GameState): void {
     const targetHue = hueForLength(state.snake.length, START_SNAKE_LENGTH);
-    this.displayedHue = lerpHue(this.displayedHue, targetHue, HUE_LERP_SPEED);
+    this.displayedHue = lerpHue(this.displayedHue, targetHue, state.config.gradientSpeed || HUE_LERP_SPEED);
     const baseHue = (205 + this.displayedHue) % 360;
     const visualSnake = this.interpolateSnake();
-    const colorForSegment = (index: number): number =>
-      hueToRgb((baseHue + index * 4.2) % 360, index === 0 ? 0.82 : 0.72, index === 0 ? 0.55 : 0.58);
+    const colorForSegment = (index: number): number => {
+      if (state.config.colorMode === "map") {
+        const segment = visualSnake[index] ?? visualSnake[visualSnake.length - 1] ?? state.snake[0]!;
+        const mapColor = mapCellColor(state.config.mapTheme, {
+          x: Math.max(0, Math.min(state.config.boardWidth - 1, Math.round(segment.x))),
+          y: Math.max(0, Math.min(state.config.boardHeight - 1, Math.round(segment.y))),
+        }, state.config);
+        return mapColor;
+      }
+      return hueToRgb((baseHue + index * 4.2) % 360, index === 0 ? 0.82 : 0.72, index === 0 ? 0.55 : 0.58);
+    };
+    const accentColor = colorForSegment(0);
+    document.documentElement.style.setProperty("--snake-accent-hue", baseHue.toFixed(1));
+    document.body.style.setProperty("--snake-accent-hue", baseHue.toFixed(1));
+    if (state.config.mapTheme === "classic") this.drawClassicBackground();
+    else this.drawDynamicBackground(accentColor, baseHue);
+    this.drawMapOverlay(state);
+    if (state.config.snakeStyle === "google") this.gridLayer.clear();
+    else this.drawGrid(state.config.mapTheme === "classic" ? COLORS.gridLine : accentColor);
 
-    this.connectorLayer.clear();
-    for (let i = 0; i < visualSnake.length - 1; i++) {
-      this.drawConnector(visualSnake[i]!, visualSnake[i + 1]!, colorForSegment(i));
-    }
+    if (state.config.snakeStyle === "google") this.drawGoogleSnake(visualSnake, colorForSegment);
+    else this.drawSnakeTube(visualSnake, colorForSegment);
 
-    visualSnake.forEach((segment, index) => {
-      const color = colorForSegment(index);
-      const glow = this.getGlow(index);
-      glow.visible = true;
-      glow.tint = color;
-      glow.alpha = index === 0 ? 0.58 : 0.3;
-      glow.x = segment.x * this.cellSize + this.cellSize / 2;
-      glow.y = segment.y * this.cellSize + this.cellSize / 2;
-
-      const seg = this.getSegment(index);
-      seg.visible = true;
-      seg.tint = color;
-      seg.x = segment.x * this.cellSize + this.cellSize / 2;
-      seg.y = segment.y * this.cellSize + this.cellSize / 2;
-      seg.scale.set(index === 0 ? 1.16 : 1, index === 0 ? 0.92 : 1);
-      seg.rotation = index === 0 ? this.rotationForDirection(state.direction) : 0;
-    });
-
-    for (let i = visualSnake.length; i < this.segmentPool.length; i++) {
+    for (let i = 0; i < this.segmentPool.length; i++) {
       this.segmentPool[i]!.visible = false;
       this.segmentGlowPool[i]!.visible = false;
     }
+
+    visualSnake.forEach((segment, index) => {
+      if (index > 0) return;
+      const color = colorForSegment(index);
+      const glow = this.getGlow(index);
+      glow.clear();
+      glow.visible = state.config.snakeStyle !== "google";
+      glow.x = segment.x * this.cellSize + this.cellSize / 2;
+      glow.y = segment.y * this.cellSize + this.cellSize / 2;
+      if (state.config.snakeStyle !== "google") {
+        glow.circle(0, 0, this.cellSize * 0.41).fill({ color, alpha: index === 0 ? 0.5 : 0.18 });
+      }
+
+      const seg = this.getSegment(index);
+      seg.clear();
+      seg.visible = true;
+      seg.x = segment.x * this.cellSize + this.cellSize / 2;
+      seg.y = segment.y * this.cellSize + this.cellSize / 2;
+      if (state.config.snakeStyle === "google") {
+        seg
+          .rect(-this.cellSize * 0.48, -this.cellSize * 0.48, this.cellSize * 0.96, this.cellSize * 0.96)
+          .fill(color);
+      } else {
+        seg.circle(0, 0, this.cellSize * 0.33).fill(color);
+      }
+      seg.scale.set(1, 1);
+      seg.rotation = 0;
+    });
 
     this.renderFace(state, visualSnake[0] ?? state.snake[0]!);
   }
 
   private renderFoods(state: GameState): void {
-    this.apple.x = state.baseApple.x * this.cellSize;
-    this.apple.y = state.baseApple.y * this.cellSize;
-
-    const presentIds = new Set(state.avatarFoods.map((f) => f.id));
+    const presentIds = new Set(state.foods.map((f) => f.id));
     for (const [id, entry] of this.avatarSprites) {
       if (!presentIds.has(id)) {
         this.avatarSprites.delete(id);
@@ -214,12 +286,21 @@ export class BoardRenderer {
       }
     }
 
-    for (const food of state.avatarFoods) {
-      this.renderAvatarFood(food);
+    for (const [id, sprite] of this.basicFoodSprites) {
+      if (!presentIds.has(id)) {
+        this.basicFoodSprites.delete(id);
+        sprite.destroy();
+      }
+    }
+
+    for (const food of state.foods) {
+      if (food.kind === "avatar") this.renderAvatarFood(food);
+      else this.renderBasicFood(food);
     }
   }
 
-  private renderAvatarFood(food: AvatarFood): void {
+  private renderAvatarFood(food: BoardFood): void {
+    if (!food.avatarUrl) return;
     let entry = this.avatarSprites.get(food.id);
     if (!entry) {
       const ring = new Graphics();
@@ -253,15 +334,145 @@ export class BoardRenderer {
     entry.sprite.y = y;
   }
 
-  private drawConnector(from: Vec2, to: Vec2, color: number): void {
-    const ax = from.x * this.cellSize + this.cellSize / 2;
-    const ay = from.y * this.cellSize + this.cellSize / 2;
-    const bx = to.x * this.cellSize + this.cellSize / 2;
-    const by = to.y * this.cellSize + this.cellSize / 2;
-    this.connectorLayer
-      .moveTo(ax, ay)
-      .lineTo(bx, by)
-      .stroke({ width: this.cellSize * 0.64, color, alpha: 0.9 });
+  private renderBasicFood(food: BoardFood): void {
+    let sprite = this.basicFoodSprites.get(food.id);
+    if (!sprite) {
+      sprite = new Sprite(this.foodTextures[food.type]);
+      sprite.anchor.set(0.5);
+      sprite.width = this.cellSize * 0.84;
+      sprite.height = this.cellSize * 0.84;
+      this.basicFoodSprites.set(food.id, sprite);
+      this.foodLayer.addChild(sprite);
+    }
+
+    sprite.x = food.pos.x * this.cellSize + this.cellSize / 2;
+    sprite.y = food.pos.y * this.cellSize + this.cellSize / 2;
+  }
+
+  private drawMapOverlay(state: GameState): void {
+    this.mapLayer.clear();
+    if (state.config.mapTheme === "classic") return;
+    for (let x = 0; x < state.config.boardWidth; x++) {
+      for (let y = 0; y < state.config.boardHeight; y++) {
+        const color = mapCellColor(state.config.mapTheme, { x, y }, state.config);
+        const key = `${x},${y}`;
+        const alpha = state.revealedCells.has(key) ? 0.92 : 0.07;
+        this.mapLayer
+          .rect(x * this.cellSize, y * this.cellSize, this.cellSize, this.cellSize)
+          .fill({ color, alpha });
+      }
+    }
+  }
+
+  private drawWalls(state: GameState): void {
+    this.wallLayer.clear();
+    if (state.walls.size === 0) return;
+
+    const wallFill =
+      state.config.gameMode === "pudding"
+        ? 0x4b8f1a
+        : state.config.gameMode === "maze_race" || state.config.gameMode === "maze_harvest"
+          ? 0xd8edff
+          : 0x314b1d;
+    const wallStroke =
+      state.config.gameMode === "pudding"
+        ? 0x8fff3d
+        : state.config.gameMode === "maze_race" || state.config.gameMode === "maze_harvest"
+          ? 0xffffff
+          : COLORS.panelLine;
+
+    for (const wall of state.walls) {
+      const [xText, yText] = wall.split(",");
+      const x = Number(xText);
+      const y = Number(yText);
+      this.wallLayer
+        .rect(x * this.cellSize + 3, y * this.cellSize + 3, this.cellSize - 6, this.cellSize - 6)
+        .fill({ color: wallFill, alpha: 0.94 })
+        .rect(x * this.cellSize + 5, y * this.cellSize + 5, this.cellSize - 10, this.cellSize - 10)
+        .stroke({ width: 2, color: wallStroke, alpha: 0.34 });
+    }
+  }
+
+  private drawSnakeTube(points: Vec2[], colorForSegment: (index: number) => number): void {
+    this.connectorLayer.clear();
+    if (points.length === 0) return;
+    const phase = performance.now() / 210;
+
+    for (let i = 0; i < points.length - 1; i++) {
+      const from = points[i]!;
+      const to = points[i + 1]!;
+      const color = colorForSegment(i);
+      const outerColor = mixRgb(color, 0x060612, 0.34);
+      const innerColor = mixRgb(color, 0xffffff, 0.16);
+      const ax = from.x * this.cellSize + this.cellSize / 2;
+      const ay = from.y * this.cellSize + this.cellSize / 2;
+      const bx = to.x * this.cellSize + this.cellSize / 2;
+      const by = to.y * this.cellSize + this.cellSize / 2;
+      this.connectorLayer
+        .moveTo(ax, ay)
+        .lineTo(bx, by)
+        .stroke({ width: this.cellSize * 0.88, color: outerColor, alpha: 0.94, cap: "round", join: "round" })
+        .moveTo(ax, ay)
+        .lineTo(bx, by)
+        .stroke({ width: this.cellSize * 0.7, color, alpha: 0.97, cap: "round", join: "round" })
+        .moveTo(ax, ay)
+        .lineTo(bx, by)
+        .stroke({ width: this.cellSize * 0.32, color: innerColor, alpha: 0.3, cap: "round", join: "round" });
+
+      const dx = bx - ax;
+      const dy = by - ay;
+      const len = Math.hypot(dx, dy) || 1;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const marks = Math.max(1, Math.floor(len / (this.cellSize * 0.38)));
+      for (let mark = 0; mark < marks; mark++) {
+        const travel = ((mark / marks) + i * 0.22 + phase * 0.055) % 1;
+        const cx = ax + dx * travel;
+        const cy = ay + dy * travel;
+        const shimmer = 0.12 + 0.16 * (0.5 + 0.5 * Math.sin(phase + mark * 0.9 + i * 0.7));
+        const bandHalf = this.cellSize * (0.11 + 0.035 * Math.sin(phase * 0.8 + mark + i));
+        const slant = this.cellSize * 0.08;
+        this.connectorLayer
+          .moveTo(cx - nx * bandHalf - dx / len * slant, cy - ny * bandHalf - dy / len * slant)
+          .lineTo(cx + nx * bandHalf + dx / len * slant, cy + ny * bandHalf + dy / len * slant)
+          .stroke({ width: this.cellSize * 0.05, color: 0xffffff, alpha: shimmer, cap: "round" });
+      }
+    }
+
+    for (let i = 2; i < points.length - 1; i += 3) {
+      const point = points[i]!;
+      const prev = points[i - 1] ?? point;
+      const next = points[i + 1] ?? point;
+      const dx = next.x - prev.x;
+      const dy = next.y - prev.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const px = (-dy / len) * this.cellSize * 0.12;
+      const py = (dx / len) * this.cellSize * 0.12;
+      const cx = point.x * this.cellSize + this.cellSize / 2;
+      const cy = point.y * this.cellSize + this.cellSize / 2;
+      this.connectorLayer
+        .moveTo(cx - px, cy - py)
+        .lineTo(cx + px, cy + py)
+        .stroke({ width: this.cellSize * 0.055, color: 0xffffff, alpha: 0.12, cap: "round" });
+    }
+  }
+
+  private drawGoogleSnake(points: Vec2[], colorForSegment: (index: number) => number): void {
+    this.connectorLayer.clear();
+    if (points.length === 0) return;
+
+    for (let i = 0; i < points.length - 1; i++) {
+      const from = points[i]!;
+      const to = points[i + 1]!;
+      const color = colorForSegment(i);
+      const minX = Math.min(from.x, to.x);
+      const minY = Math.min(from.y, to.y);
+      const width = (Math.abs(to.x - from.x) + 1) * this.cellSize;
+      const height = (Math.abs(to.y - from.y) + 1) * this.cellSize;
+      this.connectorLayer
+        .rect(minX * this.cellSize + this.cellSize * 0.02, minY * this.cellSize + this.cellSize * 0.02, width - this.cellSize * 0.04, height - this.cellSize * 0.04)
+        .fill(color);
+    }
   }
 
   private renderFace(state: GameState, visualHead: Vec2): void {
@@ -311,13 +522,6 @@ export class BoardRenderer {
     });
   }
 
-  private rotationForDirection(direction: Direction): number {
-    if (direction === "right") return 0;
-    if (direction === "down") return Math.PI / 2;
-    if (direction === "left") return Math.PI;
-    return -Math.PI / 2;
-  }
-
   private eyeOffset(direction: Direction): Vec2 {
     const amount = this.cellSize * 0.035;
     if (direction === "left") return { x: -amount, y: 0 };
@@ -346,8 +550,7 @@ export class BoardRenderer {
             : { x: head.x, y: head.y + 1 };
 
     return (
-      (next.x === state.baseApple.x && next.y === state.baseApple.y) ||
-      state.avatarFoods.some((food) => food.pos.x === next.x && food.pos.y === next.y)
+      state.foods.some((food) => food.pos.x === next.x && food.pos.y === next.y)
     );
   }
 }

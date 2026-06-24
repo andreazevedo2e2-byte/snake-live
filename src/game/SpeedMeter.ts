@@ -12,11 +12,18 @@ function multiplierForCharge(charge: number): number {
   return Math.min(MAX_MULTIPLIER, MIN_MULTIPLIER + charge * 0.1);
 }
 
-export function createSpeedMeter(): SpeedMeterState {
-  return { charge: 0, multiplier: MIN_MULTIPLIER };
+function chargeForMultiplier(multiplier: number): number {
+  if (multiplier <= MIN_MULTIPLIER) return 0;
+  return Math.min(MAX_CHARGE, Math.round((multiplier - MIN_MULTIPLIER) / 0.1));
 }
 
-export function addComment(state: SpeedMeterState): SpeedMeterState {
+export function createSpeedMeter(initialMultiplier = MIN_MULTIPLIER): SpeedMeterState {
+  const multiplier = Math.max(MIN_MULTIPLIER, Math.min(MAX_MULTIPLIER, initialMultiplier));
+  return { charge: chargeForMultiplier(multiplier), multiplier };
+}
+
+export function addComment(state: SpeedMeterState, isLocked = false): SpeedMeterState {
+  if (isLocked) return state;
   const charge = Math.min(MAX_CHARGE, state.charge + CHARGE_PER_COMMENT);
   return { charge, multiplier: multiplierForCharge(charge) };
 }

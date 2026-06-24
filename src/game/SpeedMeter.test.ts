@@ -7,6 +7,11 @@ describe("SpeedMeter", () => {
     expect(meter.multiplier).toBe(MIN_MULTIPLIER);
   });
 
+  test("can start from a configured multiplier", () => {
+    const meter = createSpeedMeter(6);
+    expect(meter.multiplier).toBe(MAX_MULTIPLIER);
+  });
+
   test("a comment increases the multiplier", () => {
     const meter = createSpeedMeter();
     const next = addComment(meter);
@@ -25,6 +30,12 @@ describe("SpeedMeter", () => {
     const charged = meter.multiplier;
     meter = decay(meter, 5);
     expect(meter.multiplier).toBe(charged);
+  });
+
+  test("locked meters ignore new comment boosts", () => {
+    const meter = createSpeedMeter(3);
+    const next = addComment(meter, true);
+    expect(next.multiplier).toBe(3);
   });
 
   test("decay never drops the multiplier below the minimum", () => {

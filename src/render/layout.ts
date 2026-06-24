@@ -35,7 +35,7 @@ export const LAYOUT = {
   commandPanel: { x: 28, y: 106, width: SCREEN_WIDTH - 56, height: 150 },
   heroBanner: { x: 28, y: 106, width: SCREEN_WIDTH - 56, height: 150 },
   speedPanel: { x: 28, y: 268, width: SCREEN_WIDTH - 56, height: 78 },
-  speedBar: { x: 330, y: 332, width: 565, height: 12 },
+  speedBar: { x: 470, y: 332, width: 425, height: 12 },
   board: { x: 34, y: 370, size: SCREEN_WIDTH - 68 },
   notification: { x: 28, y: 1405, width: SCREEN_WIDTH - 56, height: 80 },
   leaderboard: { x: 28, y: 1510, width: SCREEN_WIDTH - 56, height: 348 },

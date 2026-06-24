@@ -1,19 +1,31 @@
 import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
-import { FakeChatSource } from "../src/chat/FakeChatSource";
 import { YouTubeChatSource } from "../src/chat/YouTubeChatSource";
 import type { ChatEvent, EventSource } from "../src/chat/types";
 
 const PORT = Number(process.env.PORT ?? 8787);
 const LIVE_URL = process.env.SNAKE_LIVE_URL;
 
+class SilentChatSource implements EventSource {
+  onChatEvent(_handler: (event: ChatEvent) => void): void {
+    // Keeps the WebSocket server alive without creating fake food/speed events.
+  }
+
+  async start(): Promise<void> {
+    console.log("[server] no chat source configured; waiting for real YouTube integration");
+  }
+
+  stop(): void {
+    // No running source to stop.
+  }
+}
+
 function createEventSource(): EventSource {
   if (LIVE_URL) {
     console.log(`[server] reading real YouTube chat for: ${LIVE_URL}`);
     return new YouTubeChatSource(LIVE_URL);
   }
-  console.log("[server] SNAKE_LIVE_URL not set — using FakeChatSource (rehearsal mode)");
-  return new FakeChatSource();
+  return new SilentChatSource();
 }
 
 const clients = new Set<WebSocket>();
@@ -44,10 +56,6 @@ async function main(): Promise<void> {
     await source.start();
   } catch (err) {
     console.error("[server] chat source failed to start:", err);
-    console.error("[server] falling back to FakeChatSource so the live screen keeps moving");
-    const fallback = new FakeChatSource();
-    fallback.onChatEvent(broadcast);
-    await fallback.start();
   }
 
   httpServer.listen(PORT, () => {
