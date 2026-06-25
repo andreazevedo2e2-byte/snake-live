@@ -91,6 +91,15 @@ function createBasicFood(id: string, pos: Vec2, type: FoodType): BoardFood {
   return { id, pos, type, kind: "basic" };
 }
 
+function shuffle<T>(items: T[], rng: Rng): T[] {
+  const copy = [...items];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [copy[i], copy[j]] = [copy[j]!, copy[i]!];
+  }
+  return copy;
+}
+
 function generateMazeWalls(config: GameConfig): Set<string> {
   const walls = new Set<string>();
   for (let x = 0; x < config.boardWidth; x++) {
@@ -106,12 +115,12 @@ function generateMazeWalls(config: GameConfig): Set<string> {
 
   while (stack.length > 0) {
     const current = stack[stack.length - 1]!;
-    const candidates = [
+    const candidates = shuffle([
       { x: current.x + 2, y: current.y, between: { x: current.x + 1, y: current.y } },
       { x: current.x - 2, y: current.y, between: { x: current.x - 1, y: current.y } },
       { x: current.x, y: current.y + 2, between: { x: current.x, y: current.y + 1 } },
       { x: current.x, y: current.y - 2, between: { x: current.x, y: current.y - 1 } },
-    ].filter((entry) => {
+    ], Math.random).filter((entry) => {
       if (entry.x <= 0 || entry.y <= 0 || entry.x >= config.boardWidth - 1 || entry.y >= config.boardHeight - 1) return false;
       return !visited.has(`${entry.x},${entry.y}`);
     });
@@ -121,15 +130,15 @@ function generateMazeWalls(config: GameConfig): Set<string> {
       continue;
     }
 
-    const next = candidates[Math.floor(Math.random() * candidates.length) % candidates.length]!;
+    const next = candidates[0]!;
     visited.add(`${next.x},${next.y}`);
     walls.delete(`${next.x},${next.y}`);
     walls.delete(cellKey(next.between));
     stack.push({ x: next.x, y: next.y });
   }
 
-  const loopCarves = Math.max(1, Math.floor((config.boardWidth * config.boardHeight) * 0.012));
-  const removableWalls = [...walls].filter((wallKey) => {
+  const loopCarves = Math.max(2, Math.floor((config.boardWidth * config.boardHeight) * 0.03));
+  const removableWalls = shuffle([...walls].filter((wallKey) => {
     const [xText, yText] = wallKey.split(",");
     const x = Number(xText);
     const y = Number(yText);
@@ -137,11 +146,36 @@ function generateMazeWalls(config: GameConfig): Set<string> {
     const horizontalOpen = !walls.has(`${x - 1},${y}`) && !walls.has(`${x + 1},${y}`);
     const verticalOpen = !walls.has(`${x},${y - 1}`) && !walls.has(`${x},${y + 1}`);
     return horizontalOpen || verticalOpen;
+  }), Math.random);
+  for (let i = 0; i < loopCarves && i < removableWalls.length; i++) {
+    walls.delete(removableWalls[i]!);
+  }
+
+  const openCells = [...visited].map((entry) => {
+    const [xText, yText] = entry.split(",");
+    return { x: Number(xText), y: Number(yText) };
   });
-  for (let i = 0; i < loopCarves && removableWalls.length > 0; i++) {
-    const index = Math.floor(Math.random() * removableWalls.length) % removableWalls.length;
-    walls.delete(removableWalls[index]!);
-    removableWalls.splice(index, 1);
+
+  for (const cell of openCells) {
+    const openNeighbors = neighbors4(cell).filter((next) => inBounds(next, config.boardWidth, config.boardHeight) && !walls.has(cellKey(next)));
+    if (openNeighbors.length === 1 && Math.random() < 0.45) {
+      const extensions = shuffle(neighbors4(cell), Math.random).filter((next) => {
+        if (!inBounds(next, config.boardWidth, config.boardHeight)) return false;
+        if (!walls.has(cellKey(next))) return false;
+        const beyond = { x: next.x + (next.x - cell.x), y: next.y + (next.y - cell.y) };
+        return inBounds(beyond, config.boardWidth, config.boardHeight) && !walls.has(cellKey(beyond));
+      });
+      if (extensions.length > 0) walls.delete(cellKey(extensions[0]!));
+    }
+  }
+
+  for (let x = 1; x < config.boardWidth - 1; x++) {
+    if (!walls.has(`${x},1`)) walls.delete(`${x},0`);
+    if (!walls.has(`${x},${config.boardHeight - 2}`)) walls.delete(`${x},${config.boardHeight - 1}`);
+  }
+  for (let y = 1; y < config.boardHeight - 1; y++) {
+    if (!walls.has(`1,${y}`)) walls.delete(`0,${y}`);
+    if (!walls.has(`${config.boardWidth - 2},${y}`)) walls.delete(`${config.boardWidth - 1},${y}`);
   }
 
   ["1,1", "1,2", "2,1", "2,2"].forEach((openKey) => walls.delete(openKey));

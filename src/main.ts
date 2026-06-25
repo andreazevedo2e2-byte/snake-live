@@ -322,6 +322,7 @@ async function main(): Promise<void> {
   let failureUsedThisRound = false;
   let ticksWithoutScore = 0;
   let roundElapsedMs = 0;
+  let roundStartedAt = 0;
   let autoStartHandle: ReturnType<typeof setTimeout> | null = null;
 
   function resetRound(config: GameConfig, level: number): void {
@@ -336,6 +337,7 @@ async function main(): Promise<void> {
     failureUsedThisRound = false;
     ticksWithoutScore = 0;
     roundElapsedMs = 0;
+    roundStartedAt = 0;
   }
 
   function scheduleAutoStart(prepare?: () => void): void {
@@ -343,6 +345,8 @@ async function main(): Promise<void> {
     autoStartHandle = setTimeout(() => {
       prepare?.();
       audio.onStartClick();
+      roundElapsedMs = 0;
+      roundStartedAt = performance.now();
       state = { ...state, status: "playing" };
     }, AUTO_RESTART_DELAY_MS);
   }
@@ -404,7 +408,6 @@ async function main(): Promise<void> {
     }
 
     if (state.status === "playing") {
-      roundElapsedMs += dt * 1000;
       const scoreBefore = state.score;
       const directionBefore = state.direction;
 
@@ -434,6 +437,8 @@ async function main(): Promise<void> {
 
       if (next.status === "victory") {
         victoryCount += 1;
+        roundElapsedMs = roundStartedAt > 0 ? performance.now() - roundStartedAt : roundElapsedMs;
+        roundStartedAt = 0;
         audio.onVictory();
         scheduleAutoStart(() => {
           if (baseConfig.growthEnabled) {
@@ -445,6 +450,8 @@ async function main(): Promise<void> {
           }
         });
       } else if (next.status === "lost") {
+        roundElapsedMs = roundStartedAt > 0 ? performance.now() - roundStartedAt : roundElapsedMs;
+        roundStartedAt = 0;
         audio.onLost();
         scheduleAutoStart(() => resetRound(baseConfig, 1));
       } else {
@@ -465,12 +472,16 @@ async function main(): Promise<void> {
 
   app.ticker.add(() => {
     const effectiveSpeed = speed.multiplier * currentConfig.baseSpeedMultiplier;
+    const displayElapsedMs =
+      state.status === "playing" && roundStartedAt > 0
+        ? performance.now() - roundStartedAt
+        : roundElapsedMs;
     hud.setSpeed(effectiveSpeed);
     hud.setCounters({
       subscribers: 0,
       victories: victoryCount,
       breads: state.breadsEaten,
-      timer: formatTimer(roundElapsedMs),
+      timer: formatTimer(displayElapsedMs),
       level: currentLevel,
     });
     board.update(state, effectiveSpeed);

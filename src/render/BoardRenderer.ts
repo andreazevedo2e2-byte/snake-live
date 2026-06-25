@@ -120,17 +120,20 @@ export class BoardRenderer {
     this.drawDynamicBackground(accentColor, accentHue);
   }
 
-  private drawClassicBackground(): void {
+  private drawClassicBackground(accentColor: number, accentHue: number): void {
     const w = this.boardPixelWidth;
     const h = this.boardPixelHeight;
+    const haloColor = mixRgb(accentColor, 0x050909, 0.35);
+    const panelColor = mixRgb(accentColor, 0x081008, 0.48);
+    const orbColor = hueToRgb((accentHue + 18) % 360, 0.62, 0.48);
     this.backgroundLayer
       .clear()
       .roundRect(-11, -11, w + 22, h + 22, 12)
-      .fill({ color: COLORS.boardWall, alpha: 0.22 })
+      .fill({ color: haloColor, alpha: 0.28 })
       .roundRect(-5, -5, w + 10, h + 10, 9)
-      .fill(COLORS.boardWall)
+      .fill(panelColor)
       .roundRect(-5, -5, w + 10, h + 10, 9)
-      .stroke({ width: 4, color: COLORS.boardWall, alpha: 0.95 })
+      .stroke({ width: 4, color: accentColor, alpha: 0.96 })
       .rect(0, 0, w, h)
       .fill(COLORS.boardBackground);
 
@@ -143,11 +146,11 @@ export class BoardRenderer {
 
     this.backgroundLayer
       .circle(w * 0.18, h * 0.7, Math.min(w, h) * 0.12)
-      .fill({ color: COLORS.boardWall, alpha: 0.06 })
+      .fill({ color: orbColor, alpha: 0.08 })
       .circle(w * 0.82, h * 0.18, Math.min(w, h) * 0.1)
-      .fill({ color: COLORS.boardWall, alpha: 0.06 })
+      .fill({ color: orbColor, alpha: 0.08 })
       .ellipse(w * 0.55, h * 0.92, w * 0.22, h * 0.07)
-      .fill({ color: COLORS.boardWall, alpha: 0.05 });
+      .fill({ color: accentColor, alpha: 0.06 });
   }
 
   private drawDynamicBackground(accentColor: number = COLORS.boardWall, accentHue = 205): void {
@@ -229,7 +232,7 @@ export class BoardRenderer {
     const accentColor = colorForSegment(0);
     document.documentElement.style.setProperty("--snake-accent-hue", baseHue.toFixed(1));
     document.body.style.setProperty("--snake-accent-hue", baseHue.toFixed(1));
-    if (state.config.mapTheme === "classic") this.drawClassicBackground();
+    if (state.config.mapTheme === "classic") this.drawClassicBackground(accentColor, baseHue);
     else this.drawDynamicBackground(accentColor, baseHue);
     this.drawMapOverlay(state);
     if (state.config.snakeStyle === "google") this.gridLayer.clear();
@@ -252,7 +255,7 @@ export class BoardRenderer {
       glow.x = segment.x * this.cellSize + this.cellSize / 2;
       glow.y = segment.y * this.cellSize + this.cellSize / 2;
       if (state.config.snakeStyle !== "google") {
-        glow.circle(0, 0, this.cellSize * 0.41).fill({ color, alpha: index === 0 ? 0.5 : 0.18 });
+        glow.circle(0, 0, this.cellSize * 0.34).fill({ color, alpha: index === 0 ? 0.42 : 0.16 });
       }
 
       const seg = this.getSegment(index);
@@ -265,7 +268,7 @@ export class BoardRenderer {
           .rect(-this.cellSize * 0.48, -this.cellSize * 0.48, this.cellSize * 0.96, this.cellSize * 0.96)
           .fill(color);
       } else {
-        seg.circle(0, 0, this.cellSize * 0.33).fill(color);
+        seg.circle(0, 0, this.cellSize * 0.27).fill(color);
       }
       seg.scale.set(1, 1);
       seg.rotation = 0;
@@ -356,7 +359,7 @@ export class BoardRenderer {
       for (let y = 0; y < state.config.boardHeight; y++) {
         const color = mapCellColor(state.config.mapTheme, { x, y }, state.config);
         const key = `${x},${y}`;
-        const alpha = state.revealedCells.has(key) ? 0.92 : 0.07;
+        const alpha = state.revealedCells.has(key) ? 0.94 : 0.2;
         this.mapLayer
           .rect(x * this.cellSize, y * this.cellSize, this.cellSize, this.cellSize)
           .fill({ color, alpha });
@@ -411,13 +414,13 @@ export class BoardRenderer {
       this.connectorLayer
         .moveTo(ax, ay)
         .lineTo(bx, by)
-        .stroke({ width: this.cellSize * 0.88, color: outerColor, alpha: 0.94, cap: "round", join: "round" })
+        .stroke({ width: this.cellSize * 0.74, color: outerColor, alpha: 0.94, cap: "round", join: "round" })
         .moveTo(ax, ay)
         .lineTo(bx, by)
-        .stroke({ width: this.cellSize * 0.7, color, alpha: 0.97, cap: "round", join: "round" })
+        .stroke({ width: this.cellSize * 0.56, color, alpha: 0.97, cap: "round", join: "round" })
         .moveTo(ax, ay)
         .lineTo(bx, by)
-        .stroke({ width: this.cellSize * 0.32, color: innerColor, alpha: 0.3, cap: "round", join: "round" });
+        .stroke({ width: this.cellSize * 0.22, color: innerColor, alpha: 0.24, cap: "round", join: "round" });
 
       const dx = bx - ax;
       const dy = by - ay;
