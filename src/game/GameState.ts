@@ -91,94 +91,111 @@ function createBasicFood(id: string, pos: Vec2, type: FoodType): BoardFood {
   return { id, pos, type, kind: "basic" };
 }
 
-function shuffle<T>(items: T[], rng: Rng): T[] {
-  const copy = [...items];
-  for (let i = copy.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [copy[i], copy[j]] = [copy[j]!, copy[i]!];
+function firstOpenCell(boardWidth: number, boardHeight: number, walls: Set<string>, preferred: Vec2[] = []): Vec2 {
+  for (const cell of preferred) {
+    if (inBounds(cell, boardWidth, boardHeight) && !walls.has(cellKey(cell))) return cell;
   }
-  return copy;
+  for (let y = 0; y < boardHeight; y++) {
+    for (let x = 0; x < boardWidth; x++) {
+      const cell = { x, y };
+      if (!walls.has(cellKey(cell))) return cell;
+    }
+  }
+  return { x: 0, y: 0 };
+}
+
+function createsSolidBlock(candidate: Vec2, walls: Set<string>, boardWidth: number, boardHeight: number): boolean {
+  for (let ox = -1; ox <= 0; ox++) {
+    for (let oy = -1; oy <= 0; oy++) {
+      const cells = [
+        { x: candidate.x + ox, y: candidate.y + oy },
+        { x: candidate.x + ox + 1, y: candidate.y + oy },
+        { x: candidate.x + ox, y: candidate.y + oy + 1 },
+        { x: candidate.x + ox + 1, y: candidate.y + oy + 1 },
+      ];
+      if (cells.some((cell) => !inBounds(cell, boardWidth, boardHeight))) continue;
+      const solid = cells.every((cell) => (cell.x === candidate.x && cell.y === candidate.y) || walls.has(cellKey(cell)));
+      if (solid) return true;
+    }
+  }
+  return false;
+}
+
+function isConnectedAfterWall(boardWidth: number, boardHeight: number, walls: Set<string>, reserved: Set<string>): boolean {
+  const preferredStarts = [...reserved].map((entry) => {
+    const [xText, yText] = entry.split(",");
+    return { x: Number(xText), y: Number(yText) };
+  });
+  const start = firstOpenCell(boardWidth, boardHeight, walls, preferredStarts);
+  const reachable = reachableCells(start, walls, boardWidth, boardHeight);
+  const openCells = (boardWidth * boardHeight) - walls.size;
+  return reachable.size === openCells;
 }
 
 function generateMazeWalls(config: GameConfig): Set<string> {
   const walls = new Set<string>();
-  for (let x = 0; x < config.boardWidth; x++) {
-    for (let y = 0; y < config.boardHeight; y++) {
-      walls.add(`${x},${y}`);
-    }
-  }
+  const reserved = new Set(["0,0", "1,0", "0,1", "1,1", "2,1", "1,2", "2,2"]);
+  const totalCells = config.boardWidth * config.boardHeight;
+  const targetCoverage = config.gameMode === "maze_race" ? 0.14 : 0.18;
+  const targetWalls = Math.max(8, Math.floor(totalCells * targetCoverage));
+  const directions = [
+    { x: 1, y: 0 },
+    { x: -1, y: 0 },
+    { x: 0, y: 1 },
+    { x: 0, y: -1 },
+  ];
 
-  const start = { x: 1, y: 1 };
-  const visited = new Set<string>([cellKey(start)]);
-  const stack: Vec2[] = [start];
-  walls.delete(cellKey(start));
+  const canPlaceWall = (candidate: Vec2): boolean => {
+    const candidateKey = cellKey(candidate);
+    if (candidate.x <= 0 || candidate.y <= 0 || candidate.x >= config.boardWidth - 1 || candidate.y >= config.boardHeight - 1) return false;
+    if (reserved.has(candidateKey) || walls.has(candidateKey)) return false;
+    if (createsSolidBlock(candidate, walls, config.boardWidth, config.boardHeight)) return false;
 
-  while (stack.length > 0) {
-    const current = stack[stack.length - 1]!;
-    const candidates = shuffle([
-      { x: current.x + 2, y: current.y, between: { x: current.x + 1, y: current.y } },
-      { x: current.x - 2, y: current.y, between: { x: current.x - 1, y: current.y } },
-      { x: current.x, y: current.y + 2, between: { x: current.x, y: current.y + 1 } },
-      { x: current.x, y: current.y - 2, between: { x: current.x, y: current.y - 1 } },
-    ], Math.random).filter((entry) => {
-      if (entry.x <= 0 || entry.y <= 0 || entry.x >= config.boardWidth - 1 || entry.y >= config.boardHeight - 1) return false;
-      return !visited.has(`${entry.x},${entry.y}`);
+    const adjacentWalls = neighbors4(candidate).filter((neighbor) => walls.has(cellKey(neighbor))).length;
+    if (adjacentWalls > 2) return false;
+
+    const nextWalls = new Set(walls);
+    nextWalls.add(candidateKey);
+    if (!isConnectedAfterWall(config.boardWidth, config.boardHeight, nextWalls, reserved)) return false;
+
+    const openNeighbors = neighbors4(candidate).filter((neighbor) => inBounds(neighbor, config.boardWidth, config.boardHeight) && !nextWalls.has(cellKey(neighbor)));
+    return openNeighbors.length >= 2;
+  };
+
+  let attempts = 0;
+  while (walls.size < targetWalls && attempts < targetWalls * 80) {
+    attempts += 1;
+
+    const existingWalls = [...walls].map((entry) => {
+      const [xText, yText] = entry.split(",");
+      return { x: Number(xText), y: Number(yText) };
     });
 
-    if (candidates.length === 0) {
-      stack.pop();
-      continue;
-    }
+    const seed =
+      existingWalls.length > 0 && Math.random() < 0.72
+        ? randomChoice(existingWalls, Math.random)
+        : {
+            x: 1 + Math.floor(Math.random() * Math.max(1, config.boardWidth - 2)),
+            y: 1 + Math.floor(Math.random() * Math.max(1, config.boardHeight - 2)),
+          };
 
-    const next = candidates[0]!;
-    visited.add(`${next.x},${next.y}`);
-    walls.delete(`${next.x},${next.y}`);
-    walls.delete(cellKey(next.between));
-    stack.push({ x: next.x, y: next.y });
-  }
+    const walkLength = 2 + Math.floor(Math.random() * Math.max(2, Math.min(config.boardWidth, config.boardHeight) / 2));
+    let current = { ...seed };
+    let currentDirection = randomChoice(directions, Math.random);
 
-  const loopCarves = Math.max(2, Math.floor((config.boardWidth * config.boardHeight) * 0.03));
-  const removableWalls = shuffle([...walls].filter((wallKey) => {
-    const [xText, yText] = wallKey.split(",");
-    const x = Number(xText);
-    const y = Number(yText);
-    if (x <= 0 || y <= 0 || x >= config.boardWidth - 1 || y >= config.boardHeight - 1) return false;
-    const horizontalOpen = !walls.has(`${x - 1},${y}`) && !walls.has(`${x + 1},${y}`);
-    const verticalOpen = !walls.has(`${x},${y - 1}`) && !walls.has(`${x},${y + 1}`);
-    return horizontalOpen || verticalOpen;
-  }), Math.random);
-  for (let i = 0; i < loopCarves && i < removableWalls.length; i++) {
-    walls.delete(removableWalls[i]!);
-  }
+    for (let step = 0; step < walkLength; step++) {
+      if (canPlaceWall(current)) {
+        walls.add(cellKey(current));
+      } else if (step === 0) {
+        break;
+      }
 
-  const openCells = [...visited].map((entry) => {
-    const [xText, yText] = entry.split(",");
-    return { x: Number(xText), y: Number(yText) };
-  });
-
-  for (const cell of openCells) {
-    const openNeighbors = neighbors4(cell).filter((next) => inBounds(next, config.boardWidth, config.boardHeight) && !walls.has(cellKey(next)));
-    if (openNeighbors.length === 1 && Math.random() < 0.45) {
-      const extensions = shuffle(neighbors4(cell), Math.random).filter((next) => {
-        if (!inBounds(next, config.boardWidth, config.boardHeight)) return false;
-        if (!walls.has(cellKey(next))) return false;
-        const beyond = { x: next.x + (next.x - cell.x), y: next.y + (next.y - cell.y) };
-        return inBounds(beyond, config.boardWidth, config.boardHeight) && !walls.has(cellKey(beyond));
-      });
-      if (extensions.length > 0) walls.delete(cellKey(extensions[0]!));
+      if (Math.random() < 0.4) currentDirection = randomChoice(directions, Math.random);
+      current = { x: current.x + currentDirection.x, y: current.y + currentDirection.y };
+      if (!inBounds(current, config.boardWidth, config.boardHeight)) break;
     }
   }
 
-  for (let x = 1; x < config.boardWidth - 1; x++) {
-    if (!walls.has(`${x},1`)) walls.delete(`${x},0`);
-    if (!walls.has(`${x},${config.boardHeight - 2}`)) walls.delete(`${x},${config.boardHeight - 1}`);
-  }
-  for (let y = 1; y < config.boardHeight - 1; y++) {
-    if (!walls.has(`1,${y}`)) walls.delete(`0,${y}`);
-    if (!walls.has(`${config.boardWidth - 2},${y}`)) walls.delete(`${config.boardWidth - 1},${y}`);
-  }
-
-  ["1,1", "1,2", "2,1", "2,2"].forEach((openKey) => walls.delete(openKey));
   return walls;
 }
 
@@ -198,7 +215,11 @@ function initialSnake(config: GameConfig, walls: Set<string>): { snake: Vec2[]; 
     };
   }
 
-  const anchor = { x: 1, y: 1 };
+  const anchor = firstOpenCell(config.boardWidth, config.boardHeight, walls, [
+    { x: 1, y: 1 },
+    { x: 1, y: 2 },
+    { x: 2, y: 1 },
+  ]);
   const neighbors = neighbors4(anchor).filter((pos) => inBounds(pos, config.boardWidth, config.boardHeight) && !walls.has(cellKey(pos)));
   const tail = neighbors.find((pos) => pos.y > anchor.y) ?? neighbors.find((pos) => pos.x > anchor.x) ?? neighbors[0] ?? { x: 1, y: 2 };
   return {

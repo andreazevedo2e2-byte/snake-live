@@ -29,7 +29,7 @@ export class HudRenderer {
   private chrome = new Graphics();
   private subsText: Text;
   private winsText: Text;
-  private breadsText: Text;
+  private foodText: Text;
   private timerText: Text;
   private levelText: Text;
   private speedBarFill: Graphics;
@@ -58,16 +58,16 @@ export class HudRenderer {
     this.winsText.x = 420;
     this.winsText.y = 41;
 
-    this.breadsText = label("BREAD 0", 24, COLORS.heroGold);
-    this.breadsText.x = 610;
-    this.breadsText.y = 44;
+    this.foodText = label("FOOD 0", 22, COLORS.heroGold);
+    this.foodText.x = 560;
+    this.foodText.y = 45;
 
-    this.timerText = label("00:00.000", 24, COLORS.hud);
-    this.timerText.x = 724;
-    this.timerText.y = 43;
+    this.timerText = label("00:00.000", 22, COLORS.hud);
+    this.timerText.x = 694;
+    this.timerText.y = 45;
 
     this.levelText = label("LV 1", 22, COLORS.hudMuted);
-    this.levelText.x = 940;
+    this.levelText.x = 974;
     this.levelText.y = 46;
 
     const command = label("COMMENT", 26, COLORS.hudMuted);
@@ -138,7 +138,7 @@ export class HudRenderer {
       live,
       this.subsText,
       this.winsText,
-      this.breadsText,
+      this.foodText,
       this.timerText,
       this.levelText,
       command,
@@ -190,7 +190,7 @@ export class HudRenderer {
   }): void {
     this.subsText.text = `SUBS ${subscribers.toLocaleString("en-US")}`;
     this.winsText.text = `WINS ${victories.toLocaleString("en-US")}`;
-    this.breadsText.text = `BREAD ${breads.toLocaleString("en-US")}`;
+    this.foodText.text = `FOOD ${breads.toLocaleString("en-US")}`;
     this.timerText.text = timer;
     this.levelText.text = `LV ${level}`;
   }

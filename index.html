@@ -31,70 +31,22 @@
         image-rendering: auto;
         filter: drop-shadow(0 0 22px hsla(var(--snake-accent-hue), 95%, 58%, 0.22));
       }
-      #volume-toggle {
-        position: fixed;
-        top: max(12px, calc(50vh - min(50vh, 88.889vw) + 28px));
-        left: calc(50vw + min(28.125vh, 50vw) - 100px);
-        width: 42px;
-        height: 42px;
-        z-index: 11;
-        border: 0;
-        padding: 0;
-        background: transparent;
-        cursor: pointer;
-      }
-      #volume-control {
-        position: fixed;
-        top: max(12px, calc(50vh - min(50vh, 88.889vw) + 72px));
-        left: calc(50vw + min(28.125vh, 50vw) - min(210px, 44vw) - 18px);
-        width: min(210px, 44vw);
-        z-index: 10;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 6px 8px;
-        border: 1px solid rgba(105, 210, 12, 0.7);
-        border-radius: 6px;
-        background: rgba(5, 9, 5, 0.78);
-        color: #ffffff;
-        font: 800 11px Arial, Helvetica, sans-serif;
-        letter-spacing: 0.06em;
-        box-shadow: 0 0 14px rgba(116, 255, 24, 0.14);
-        opacity: 0;
-        pointer-events: none;
-        transform: translateY(-6px);
-        transition: opacity 140ms ease, transform 140ms ease;
-      }
-      #volume-control.is-open {
-        opacity: 1;
-        pointer-events: auto;
-        transform: translateY(0);
-      }
-      #volume-control input {
-        width: 100%;
-        accent-color: #a9ff12;
-      }
-      #volume-value {
-        min-width: 30px;
-        color: #a9ff12;
-        text-align: right;
-      }
       #settings-toggle {
         position: fixed;
-        top: 12px;
-        left: 12px;
+        top: 10px;
+        left: 10px;
         z-index: 12;
-        width: 24px;
-        height: 24px;
-        border: 1px solid rgba(105, 210, 12, 0.14);
+        width: 22px;
+        height: 22px;
+        border: 1px solid rgba(105, 210, 12, 0.12);
         border-radius: 999px;
-        background: rgba(5, 9, 5, 0.26);
-        color: rgba(183, 255, 77, 0.62);
-        font: 900 12px Arial, Helvetica, sans-serif;
+        background: rgba(5, 9, 5, 0.2);
+        color: rgba(183, 255, 77, 0.54);
+        font: 900 11px Arial, Helvetica, sans-serif;
         padding: 0;
         cursor: pointer;
         backdrop-filter: blur(2px);
-        opacity: 0.78;
+        opacity: 0.68;
       }
       #settings-panel {
         position: fixed;
@@ -227,7 +179,7 @@
           </select>
         </label>
         <label>
-          <span>Comment speed</span>
+          <span>Velocidade do comentario</span>
           <select id="setting-comment-speed-mode">
             <option value="gradual">Aumentar gradualmente</option>
             <option value="fixed">Travar no valor inicial</option>
@@ -235,7 +187,18 @@
         </label>
         <label>
           <span>Valor inicial do speed</span>
-          <input id="setting-comment-speed-start" type="range" min="1" max="6" step="0.1" value="1" />
+          <select id="setting-comment-speed-start">
+            <option value="1">1x</option>
+            <option value="2">2x</option>
+            <option value="3">3x</option>
+            <option value="4">4x</option>
+            <option value="5">5x</option>
+            <option value="6">6x</option>
+          </select>
+        </label>
+        <label>
+          <span>Volume do jogo</span>
+          <input id="volume-slider" type="range" min="0" max="100" value="60" />
         </label>
         <fieldset>
           <legend>Comidas</legend>
@@ -280,12 +243,6 @@
         <button id="settings-apply" type="submit">APLICAR E REINICIAR</button>
       </div>
     </form>
-    <button id="volume-toggle" type="button" aria-label="Toggle game volume"></button>
-    <label id="volume-control">
-      VOL
-      <input id="volume-slider" type="range" min="0" max="100" value="60" />
-      <span id="volume-value">60%</span>
-    </label>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

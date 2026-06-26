@@ -113,7 +113,9 @@ export class BoardRenderer {
     this.previousSnake = this.interpolateSnake();
     this.currentSnake = state.snake.map((segment) => ({ ...segment }));
     this.snakeAnimationStart = performance.now();
-    this.snakeAnimationMs = Math.max(90, 320 / speedMultiplier);
+    // Keep the animation duration below the gameplay tick at high speeds so
+    // 5x/6x does not visually "queue" two turns into one blurred motion.
+    this.snakeAnimationMs = Math.max(48, 300 / speedMultiplier);
   }
 
   private drawBackground(accentColor: number = COLORS.boardWall, accentHue = 205): void {

@@ -14,10 +14,8 @@ function shuffle<T>(items: T[]): T[] {
 
 /**
  * Background music playlist: shuffle + crossfade + infinite loop, playing
- * only copyright-free/CC0 tracks hosted locally (see design spec "Música" —
- * never a YouTube playlist or licensed music, to protect the channel's path
- * to monetization). If no tracks are configured, this silently no-ops
- * instead of breaking the live screen.
+ * only copyright-free/CC0 tracks hosted locally. If no tracks are configured,
+ * this simply stays silent instead of polluting the console during QA.
  */
 export class MusicPlayer {
   private queue: string[] = [];
@@ -27,13 +25,7 @@ export class MusicPlayer {
   constructor(private readonly trackUrls: string[]) {}
 
   start(): void {
-    if (this.trackUrls.length === 0) {
-      console.warn(
-        "[MusicPlayer] no CC0 tracks configured — drop files into assets/music and list them " +
-          "in assets/music/playlist.json. Running without background music for now."
-      );
-      return;
-    }
+    if (this.trackUrls.length === 0) return;
     this.active = true;
     this.queue = shuffle(this.trackUrls);
     this.playNext();
@@ -64,7 +56,7 @@ export class MusicPlayer {
 
     next.once("end", () => this.playNext());
     next.once("loaderror", () => {
-      console.error(`[MusicPlayer] failed to load track: ${url} — skipping`);
+      console.error(`[MusicPlayer] failed to load track: ${url} - skipping`);
       this.playNext();
     });
   }

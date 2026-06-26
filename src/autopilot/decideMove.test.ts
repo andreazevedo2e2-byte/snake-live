@@ -162,6 +162,39 @@ describe("decideMove heads straight for food instead of circling it", () => {
 
     expect(moveSequence(1)).not.toBe(moveSequence(2));
   });
+
+  test("takes an obvious one-turn shortcut on classic boards instead of continuing the zig-zag", () => {
+    const wideCfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 10, boardHeight: 8, maxAvatarFoods: 0 };
+    const state: GameState = {
+      ...createGame(wideCfg, () => 0),
+      status: "playing",
+      snake: [
+        { x: 7, y: 5 },
+        { x: 6, y: 5 },
+        { x: 5, y: 5 },
+        { x: 4, y: 5 },
+        { x: 3, y: 5 },
+        { x: 2, y: 5 },
+        { x: 1, y: 5 },
+        { x: 0, y: 5 },
+        { x: 0, y: 6 },
+        { x: 0, y: 7 },
+        { x: 1, y: 7 },
+        { x: 2, y: 7 },
+        { x: 3, y: 7 },
+        { x: 4, y: 7 },
+        { x: 5, y: 7 },
+        { x: 6, y: 7 },
+        { x: 7, y: 7 },
+        { x: 8, y: 7 },
+        { x: 9, y: 7 },
+        { x: 9, y: 6 },
+      ],
+      direction: "right",
+      foods: [basicFood({ x: 4, y: 3 })],
+    };
+    expect(decideMove(state)).toBe("up");
+  });
 });
 
 function playToEnd(boardWidth: number, boardHeight: number): "win" | "loss" | "stall" {

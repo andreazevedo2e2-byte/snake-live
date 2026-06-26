@@ -37,6 +37,11 @@ const MAP_MIN_SIZE: Record<MapThemeId, { width: number; height: number }> = {
   brazil: { width: 28, height: 18 },
   creeper: { width: 18, height: 18 },
 };
+const MODE_MIN_SIZE: Partial<Record<GameMode, { width: number; height: number }>> = {
+  maze_race: { width: 14, height: 10 },
+  maze_harvest: { width: 14, height: 10 },
+  pudding: { width: 14, height: 10 },
+};
 
 const DIRECTION_VECTORS: Record<Direction, Vec2> = {
   up: { x: 0, y: -1 },
@@ -105,6 +110,48 @@ function reachableSpace(snake: Vec2[], state: GameState): number {
   return seen.size;
 }
 
+function nearestFoodDistance(state: GameState, pos: Vec2): number {
+  if (state.foods.length === 0) return 999;
+  return Math.min(...state.foods.map((food) => Math.abs(food.pos.x - pos.x) + Math.abs(food.pos.y - pos.y)));
+}
+
+function nextHeadForDirection(state: GameState, direction: Direction): Vec2 {
+  const head = state.snake[0]!;
+  const vec = DIRECTION_VECTORS[direction];
+  return { x: head.x + vec.x, y: head.y + vec.y };
+}
+
+function detectRepetitionLoop(history: string[]): boolean {
+  if (history.length < 16) return false;
+  const recent = history.slice(-16);
+  const uniqueStates = new Set(recent);
+  const uniqueHeads = new Set(recent.map((entry) => entry.split("|")[0]!));
+  return uniqueStates.size <= 8 || uniqueHeads.size <= 6;
+}
+
+function pickLoopBreakerDirection(state: GameState, currentDirection: Direction, history: string[]): Direction | null {
+  let best: { direction: Direction; score: number } | null = null;
+  const recent = history.slice(-18);
+
+  for (const direction of Object.keys(DIRECTION_VECTORS) as Direction[]) {
+    const snake = simulateSnakeAfterMove(state, direction);
+    if (!snake) continue;
+
+    const head = snake[0]!;
+    const signature = `${head.x},${head.y}|${direction}`;
+    const repeats = recent.filter((entry) => entry === signature).length;
+    const space = reachableSpace(snake, state);
+    const foodDistance = nearestFoodDistance(state, head);
+    const unrevealedBonus = state.revealedCells.has(posKey(head)) ? 0 : 5;
+    const turnBias = direction === currentDirection ? -1.2 : 0;
+    const score = space * 1.15 - foodDistance * 2.6 - repeats * 8 + unrevealedBonus + turnBias;
+
+    if (!best || score > best.score) best = { direction, score };
+  }
+
+  return best?.direction ?? null;
+}
+
 function pickDifficultHumanMistake(state: GameState, correctDirection: Direction): Direction | null {
   const fill = state.snake.length / (state.config.boardWidth * state.config.boardHeight);
   if (fill < 0.72) return null;
@@ -141,6 +188,15 @@ function formatTimer(ms: number): string {
   const seconds = totalSeconds % 60;
   const milliseconds = Math.floor(ms % 1000);
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(milliseconds).padStart(3, "0")}`;
+}
+
+function minimumBoardSize(mapTheme: MapThemeId, gameMode: GameMode): { width: number; height: number } {
+  const mapMinimum = MAP_MIN_SIZE[mapTheme];
+  const modeMinimum = MODE_MIN_SIZE[gameMode];
+  return {
+    width: Math.max(mapMinimum.width, modeMinimum?.width ?? 0),
+    height: Math.max(mapMinimum.height, modeMinimum?.height ?? 0),
+  };
 }
 
 async function loadFoodTextures(): Promise<Record<FoodType, Texture>> {
@@ -188,16 +244,13 @@ async function main(): Promise<void> {
   const settingsToggle = document.getElementById("settings-toggle") as HTMLButtonElement | null;
   const settingsPanel = document.getElementById("settings-panel") as HTMLFormElement | null;
   const volumeSlider = document.getElementById("volume-slider") as HTMLInputElement | null;
-  const volumeValue = document.getElementById("volume-value");
-  const volumeToggle = document.getElementById("volume-toggle");
-  const volumeControl = document.getElementById("volume-control");
 
   const mapSelect = document.getElementById("setting-map") as HTMLSelectElement | null;
   const modeSelect = document.getElementById("setting-mode") as HTMLSelectElement | null;
   const colorsSelect = document.getElementById("setting-colors") as HTMLSelectElement | null;
   const snakeSelect = document.getElementById("setting-snake") as HTMLSelectElement | null;
   const commentSpeedModeSelect = document.getElementById("setting-comment-speed-mode") as HTMLSelectElement | null;
-  const commentSpeedStartInput = document.getElementById("setting-comment-speed-start") as HTMLInputElement | null;
+  const commentSpeedStartInput = document.getElementById("setting-comment-speed-start") as HTMLSelectElement | null;
   const widthInput = document.getElementById("setting-width") as HTMLInputElement | null;
   const heightInput = document.getElementById("setting-height") as HTMLInputElement | null;
   const growthInput = document.getElementById("setting-growth") as HTMLInputElement | null;
@@ -209,13 +262,9 @@ async function main(): Promise<void> {
   const foodBread = document.getElementById("food-bread") as HTMLInputElement | null;
   const foodWatermelon = document.getElementById("food-watermelon") as HTMLInputElement | null;
 
-  volumeToggle?.addEventListener("click", () => {
-    volumeControl?.classList.toggle("is-open");
-  });
   volumeSlider?.addEventListener("input", () => {
     const value = Number(volumeSlider.value);
     audio.setVolume(value / 100);
-    if (volumeValue) volumeValue.textContent = `${value}%`;
   });
 
   settingsToggle?.addEventListener("click", () => {
@@ -224,12 +273,20 @@ async function main(): Promise<void> {
 
   mapSelect?.addEventListener("change", () => {
     const theme = (mapSelect.value as MapThemeId) ?? DEFAULT_CONFIG.mapTheme;
-    const minSize = MAP_MIN_SIZE[theme];
+    const gameMode = (modeSelect?.value as GameMode | undefined) ?? DEFAULT_CONFIG.gameMode;
+    const minSize = minimumBoardSize(theme, gameMode);
     if (widthInput) widthInput.value = String(Math.max(Number(widthInput.value || DEFAULT_CONFIG.boardWidth), minSize.width));
     if (heightInput) heightInput.value = String(Math.max(Number(heightInput.value || DEFAULT_CONFIG.boardHeight), minSize.height));
     if (theme !== "classic" && snakeSelect && snakeSelect.value === "smooth") {
       snakeSelect.value = "google";
     }
+  });
+  modeSelect?.addEventListener("change", () => {
+    const theme = (mapSelect?.value as MapThemeId | undefined) ?? DEFAULT_CONFIG.mapTheme;
+    const gameMode = (modeSelect.value as GameMode | undefined) ?? DEFAULT_CONFIG.gameMode;
+    const minSize = minimumBoardSize(theme, gameMode);
+    if (widthInput) widthInput.value = String(Math.max(Number(widthInput.value || DEFAULT_CONFIG.boardWidth), minSize.width));
+    if (heightInput) heightInput.value = String(Math.max(Number(heightInput.value || DEFAULT_CONFIG.boardHeight), minSize.height));
   });
 
   const startAudioOnce = () => {
@@ -251,14 +308,15 @@ async function main(): Promise<void> {
 
   function buildConfigFromInputs(): GameConfig {
     const mapTheme = (mapSelect?.value as MapThemeId | undefined) ?? DEFAULT_CONFIG.mapTheme;
-    const minSize = MAP_MIN_SIZE[mapTheme];
+    const gameMode = (modeSelect?.value as GameMode | undefined) ?? DEFAULT_CONFIG.gameMode;
+    const minSize = minimumBoardSize(mapTheme, gameMode);
     return {
       ...DEFAULT_CONFIG,
       boardWidth: clamp(Math.max(Number(widthInput?.value ?? DEFAULT_CONFIG.boardWidth), minSize.width), 8, MAX_START_WIDTH),
       boardHeight: clamp(Math.max(Number(heightInput?.value ?? DEFAULT_CONFIG.boardHeight), minSize.height), 6, MAX_START_HEIGHT),
       maxAvatarFoods: DEFAULT_CONFIG.maxAvatarFoods,
       mapTheme,
-      gameMode: (modeSelect?.value as GameMode | undefined) ?? DEFAULT_CONFIG.gameMode,
+      gameMode,
       colorMode: (colorsSelect?.value as ColorMode | undefined) ?? DEFAULT_CONFIG.colorMode,
       snakeStyle: (snakeSelect?.value as SnakeStyle | undefined) ?? DEFAULT_CONFIG.snakeStyle,
       commentSpeedMode: commentSpeedModeSelect?.value === "fixed" ? "fixed" : "gradual",
@@ -323,6 +381,7 @@ async function main(): Promise<void> {
   let ticksWithoutScore = 0;
   let roundElapsedMs = 0;
   let roundStartedAt = 0;
+  let recentStates: string[] = [];
   let autoStartHandle: ReturnType<typeof setTimeout> | null = null;
 
   function resetRound(config: GameConfig, level: number): void {
@@ -338,6 +397,7 @@ async function main(): Promise<void> {
     ticksWithoutScore = 0;
     roundElapsedMs = 0;
     roundStartedAt = 0;
+    recentStates = [];
   }
 
   function scheduleAutoStart(prepare?: () => void): void {
@@ -420,25 +480,37 @@ async function main(): Promise<void> {
       }
 
       const correctDirection = decideMove(state, effectiveSpeed, Math.random, roundVariant);
+      const nextFoodDistance = nearestFoodDistance(state, nextHeadForDirection(state, correctDirection));
+      const currentFoodDistance = nearestFoodDistance(state, state.snake[0]!);
+      const loopDetected =
+        ticksWithoutScore > Math.max(12, state.config.boardWidth + 2) &&
+        detectRepetitionLoop(recentStates) &&
+        nextFoodDistance >= currentFoodDistance;
+      const loopBreaker = loopDetected ? pickLoopBreakerDirection(state, correctDirection, recentStates) : null;
       const humanMistake =
         shouldFailThisRound && !failureUsedThisRound
           ? pickDifficultHumanMistake(state, correctDirection)
           : null;
-      const direction = humanMistake ?? correctDirection;
+      const direction = humanMistake ?? loopBreaker ?? correctDirection;
       if (humanMistake) failureUsedThisRound = true;
 
       const next = tick(setDirection(state, direction));
       if (next.score > scoreBefore) {
         ticksWithoutScore = 0;
+        recentStates = [];
         audio.onEat();
       } else {
         ticksWithoutScore += 1;
       }
 
+      recentStates.push(`${next.snake[0]!.x},${next.snake[0]!.y}|${next.direction}`);
+      if (recentStates.length > 32) recentStates = recentStates.slice(-32);
+
       if (next.status === "victory") {
         victoryCount += 1;
         roundElapsedMs = roundStartedAt > 0 ? performance.now() - roundStartedAt : roundElapsedMs;
         roundStartedAt = 0;
+        recentStates = [];
         audio.onVictory();
         scheduleAutoStart(() => {
           if (baseConfig.growthEnabled) {
@@ -452,6 +524,7 @@ async function main(): Promise<void> {
       } else if (next.status === "lost") {
         roundElapsedMs = roundStartedAt > 0 ? performance.now() - roundStartedAt : roundElapsedMs;
         roundStartedAt = 0;
+        recentStates = [];
         audio.onLost();
         scheduleAutoStart(() => resetRound(baseConfig, 1));
       } else {
