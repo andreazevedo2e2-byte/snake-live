@@ -132,75 +132,73 @@ function isConnectedAfterWall(boardWidth: number, boardHeight: number, walls: Se
   return reachable.size === openCells;
 }
 
-function generateMazeWalls(config: GameConfig): Set<string> {
-  const walls = new Set<string>();
-  const reserved = new Set(["0,0", "1,0", "0,1", "1,1", "2,1", "1,2", "2,2"]);
-  const totalCells = config.boardWidth * config.boardHeight;
-  const targetCoverage = config.gameMode === "maze_race" ? 0.14 : 0.18;
-  const targetWalls = Math.max(8, Math.floor(totalCells * targetCoverage));
+function generateMazeWalls(config: GameConfig, rng: Rng): Set<string> {
+  const width = config.boardWidth;
+  const height = config.boardHeight;
+  const mazeWidth = width % 2 === 0 ? width - 1 : width;
+  const mazeHeight = height % 2 === 0 ? height - 1 : height;
+  const carved = new Set<string>();
+  const visited = new Set<string>();
+  const stack: Vec2[] = [{ x: 1, y: 1 }];
   const directions = [
-    { x: 1, y: 0 },
-    { x: -1, y: 0 },
-    { x: 0, y: 1 },
-    { x: 0, y: -1 },
+    { x: 2, y: 0 },
+    { x: -2, y: 0 },
+    { x: 0, y: 2 },
+    { x: 0, y: -2 },
   ];
 
-  const canPlaceWall = (candidate: Vec2): boolean => {
-    const candidateKey = cellKey(candidate);
-    if (candidate.x <= 0 || candidate.y <= 0 || candidate.x >= config.boardWidth - 1 || candidate.y >= config.boardHeight - 1) return false;
-    if (reserved.has(candidateKey) || walls.has(candidateKey)) return false;
-    if (createsSolidBlock(candidate, walls, config.boardWidth, config.boardHeight)) return false;
+  const insideMaze = (pos: Vec2): boolean =>
+    pos.x > 0 && pos.y > 0 && pos.x < mazeWidth - 1 && pos.y < mazeHeight - 1;
 
-    const adjacentWalls = neighbors4(candidate).filter((neighbor) => walls.has(cellKey(neighbor))).length;
-    if (adjacentWalls > 2) return false;
-
-    const nextWalls = new Set(walls);
-    nextWalls.add(candidateKey);
-    if (!isConnectedAfterWall(config.boardWidth, config.boardHeight, nextWalls, reserved)) return false;
-
-    const openNeighbors = neighbors4(candidate).filter((neighbor) => inBounds(neighbor, config.boardWidth, config.boardHeight) && !nextWalls.has(cellKey(neighbor)));
-    return openNeighbors.length >= 2;
+  const shuffleDirections = (): typeof directions => {
+    const copy = [...directions];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [copy[i], copy[j]] = [copy[j]!, copy[i]!];
+    }
+    return copy;
   };
 
-  let attempts = 0;
-  while (walls.size < targetWalls && attempts < targetWalls * 80) {
-    attempts += 1;
+  carved.add("1,1");
+  visited.add("1,1");
 
-    const existingWalls = [...walls].map((entry) => {
-      const [xText, yText] = entry.split(",");
-      return { x: Number(xText), y: Number(yText) };
+  while (stack.length > 0) {
+    const current = stack[stack.length - 1]!;
+    const nextDirection = shuffleDirections().find((dir) => {
+      const next = { x: current.x + dir.x, y: current.y + dir.y };
+      return insideMaze(next) && !visited.has(cellKey(next));
     });
 
-    const seed =
-      existingWalls.length > 0 && Math.random() < 0.72
-        ? randomChoice(existingWalls, Math.random)
-        : {
-            x: 1 + Math.floor(Math.random() * Math.max(1, config.boardWidth - 2)),
-            y: 1 + Math.floor(Math.random() * Math.max(1, config.boardHeight - 2)),
-          };
+    if (!nextDirection) {
+      stack.pop();
+      continue;
+    }
 
-    const walkLength = 2 + Math.floor(Math.random() * Math.max(2, Math.min(config.boardWidth, config.boardHeight) / 2));
-    let current = { ...seed };
-    let currentDirection = randomChoice(directions, Math.random);
+    const next = { x: current.x + nextDirection.x, y: current.y + nextDirection.y };
+    const between = { x: current.x + nextDirection.x / 2, y: current.y + nextDirection.y / 2 };
+    visited.add(cellKey(next));
+    carved.add(cellKey(between));
+    carved.add(cellKey(next));
+    stack.push(next);
+  }
 
-    for (let step = 0; step < walkLength; step++) {
-      if (canPlaceWall(current)) {
-        walls.add(cellKey(current));
-      } else if (step === 0) {
-        break;
-      }
-
-      if (Math.random() < 0.4) currentDirection = randomChoice(directions, Math.random);
-      current = { x: current.x + currentDirection.x, y: current.y + currentDirection.y };
-      if (!inBounds(current, config.boardWidth, config.boardHeight)) break;
+  const walls = new Set<string>();
+  for (let x = 0; x < width; x++) {
+    for (let y = 0; y < height; y++) {
+      const pos = { x, y };
+      const onBorder = x === 0 || y === 0 || x === width - 1 || y === height - 1;
+      if (onBorder) continue;
+      if (!carved.has(cellKey(pos))) walls.add(cellKey(pos));
     }
   }
 
+  const reserved = new Set(["1,1", "1,2", "2,1", "2,2"]);
+  for (const cell of reserved) walls.delete(cell);
   return walls;
 }
 
-function initialWalls(config: GameConfig): Set<string> {
-  if (config.gameMode === "maze_race" || config.gameMode === "maze_harvest") return generateMazeWalls(config);
+function initialWalls(config: GameConfig, rng: Rng): Set<string> {
+  if (config.gameMode === "maze_race" || config.gameMode === "maze_harvest") return generateMazeWalls(config, rng);
   return new Set<string>();
 }
 
@@ -313,7 +311,7 @@ function initialFoods(config: GameConfig, snake: Vec2[], walls: Set<string>, rng
 
 export function createGame(config: Partial<GameConfig>, rng: Rng = Math.random): GameState {
   const resolvedConfig = resolveConfig(config);
-  const walls = initialWalls(resolvedConfig);
+  const walls = initialWalls(resolvedConfig, rng);
   const { snake, direction } = initialSnake(resolvedConfig, walls);
   return {
     config: resolvedConfig,
@@ -344,6 +342,8 @@ function isOutOfBounds(pos: Vec2, boardWidth: number, boardHeight: number): bool
 function maybeAddPuddingWall(state: GameState, snake: Vec2[], foods: BoardFood[], rng: Rng): Set<string> {
   if (state.config.gameMode !== "pudding") return state.walls;
   if ((state.score + 1) % 2 === 0) return state.walls;
+  const maxWalls = Math.floor((state.config.boardWidth * state.config.boardHeight) * 0.12);
+  if (state.walls.size >= maxWalls) return state.walls;
   const blocked = occupiedCells({ snake, foods, walls: state.walls });
   const candidates: Vec2[] = [];
   for (let x = 0; x < state.config.boardWidth; x++) {
@@ -356,6 +356,7 @@ function maybeAddPuddingWall(state: GameState, snake: Vec2[], foods: BoardFood[]
       const occupiedIfPlaced = new Set([...blocked, key]);
       if (freeNeighborCount(pos, blocked, state.config.boardWidth, state.config.boardHeight) < 2) continue;
       const reachableAfterPlacement = reachableCells(snake[0]!, new Set([...snake.slice(0, -1).map(cellKey), ...state.walls, key]), state.config.boardWidth, state.config.boardHeight);
+      if (reachableAfterPlacement.size < snake.length + 10) continue;
       if (foods.some((food) => !reachableAfterPlacement.has(cellKey(food.pos)))) continue;
       const borderTrap = (pos.x === 1 || pos.y === 1 || pos.x === state.config.boardWidth - 2 || pos.y === state.config.boardHeight - 2)
         && freeNeighborCount(pos, occupiedIfPlaced, state.config.boardWidth, state.config.boardHeight) < 2;

@@ -19,6 +19,7 @@ export type GameMode = "classic" | "full_food" | "maze_race" | "maze_harvest" | 
 export type ColorMode = "gradient" | "map";
 export type SnakeStyle = "smooth" | "google";
 export type CommentSpeedMode = "gradual" | "fixed";
+export type InterfaceMode = "live" | "shorts";
 
 export interface BoardFood {
   id: string;
@@ -41,6 +42,7 @@ export interface GameConfig {
   colorMode: ColorMode;
   snakeStyle: SnakeStyle;
   commentSpeedMode: CommentSpeedMode;
+  interfaceMode: InterfaceMode;
   commentSpeedStart: number;
   gradientSpeed: number;
   baseSpeedMultiplier: number;
@@ -60,6 +62,7 @@ export const DEFAULT_CONFIG: GameConfig = {
   colorMode: "gradient",
   snakeStyle: "smooth",
   commentSpeedMode: "gradual",
+  interfaceMode: "shorts",
   commentSpeedStart: 1,
   gradientSpeed: 0.04,
   baseSpeedMultiplier: 1,

@@ -172,6 +172,13 @@
           </select>
         </label>
         <label>
+          <span>Interface</span>
+          <select id="setting-interface">
+            <option value="live">Live</option>
+              <option value="shorts">Video</option>
+          </select>
+        </label>
+        <label>
           <span>Estilo da cobra</span>
           <select id="setting-snake">
             <option value="smooth">Suave</option>
@@ -179,14 +186,14 @@
           </select>
         </label>
         <label>
-          <span>Velocidade do comentario</span>
+          <span>Progressão do speed do chat</span>
           <select id="setting-comment-speed-mode">
             <option value="gradual">Aumentar gradualmente</option>
             <option value="fixed">Travar no valor inicial</option>
           </select>
         </label>
         <label>
-          <span>Valor inicial do speed</span>
+          <span>Speed inicial do chat</span>
           <select id="setting-comment-speed-start">
             <option value="1">1x</option>
             <option value="2">2x</option>
@@ -226,16 +233,37 @@
           </div>
         </label>
         <label>
-          <span>Velocidade base</span>
-          <input id="setting-speed" type="range" min="0.6" max="2.4" step="0.1" value="1" />
+          <span>Ritmo da partida</span>
+          <select id="setting-speed">
+            <option value="0.8">0.8x</option>
+            <option value="1" selected>1x</option>
+            <option value="1.2">1.2x</option>
+            <option value="1.5">1.5x</option>
+            <option value="2">2x</option>
+          </select>
         </label>
         <label>
           <span>Velocidade do gradiente</span>
-          <input id="setting-gradient" type="range" min="0.01" max="0.12" step="0.01" value="0.04" />
+          <select id="setting-gradient">
+            <option value="0.01">10%</option>
+            <option value="0.03">30%</option>
+            <option value="0.04" selected>40%</option>
+            <option value="0.06">60%</option>
+            <option value="0.08">80%</option>
+            <option value="0.12">100%</option>
+          </select>
         </label>
         <label>
           <span>Taxa de erro</span>
-          <input id="setting-errors" type="range" min="0" max="100" step="1" value="20" />
+          <select id="setting-errors">
+            <option value="0">0%</option>
+            <option value="5">5%</option>
+            <option value="10">10%</option>
+            <option value="20" selected>20%</option>
+            <option value="30">30%</option>
+            <option value="40">40%</option>
+            <option value="50">50%</option>
+          </select>
         </label>
         <div class="settings-note">
           Mapa cheio preenche tudo com comida. Labirinto final leva a uma fruta-alvo. Blocos dinâmicos criam obstáculos novos durante a partida.

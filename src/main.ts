@@ -8,6 +8,7 @@ import {
   type GameConfig,
   type GameMode,
   type GameState,
+  type InterfaceMode,
   type MapThemeId,
   type SnakeStyle,
   type Vec2,
@@ -31,16 +32,16 @@ const DEFAULT_VOLUME = 0.6;
 const CHAT_WS_URL = (import.meta.env.VITE_CHAT_WS_URL as string | undefined) ?? "ws://localhost:8787";
 const MAX_START_WIDTH = 28;
 const MAX_START_HEIGHT = 20;
-const MAP_MIN_SIZE: Record<MapThemeId, { width: number; height: number }> = {
+const MAP_PRESET_SIZE: Record<MapThemeId, { width: number; height: number }> = {
   classic: { width: 10, height: 8 },
-  heart: { width: 16, height: 14 },
+  heart: { width: 18, height: 16 },
   brazil: { width: 28, height: 18 },
-  creeper: { width: 18, height: 18 },
+  creeper: { width: 20, height: 20 },
 };
-const MODE_MIN_SIZE: Partial<Record<GameMode, { width: number; height: number }>> = {
-  maze_race: { width: 14, height: 10 },
-  maze_harvest: { width: 14, height: 10 },
-  pudding: { width: 14, height: 10 },
+const MODE_PRESET_SIZE: Partial<Record<GameMode, { width: number; height: number }>> = {
+  maze_race: { width: 16, height: 12 },
+  maze_harvest: { width: 18, height: 14 },
+  pudding: { width: 16, height: 12 },
 };
 
 const DIRECTION_VECTORS: Record<Direction, Vec2> = {
@@ -191,12 +192,16 @@ function formatTimer(ms: number): string {
 }
 
 function minimumBoardSize(mapTheme: MapThemeId, gameMode: GameMode): { width: number; height: number } {
-  const mapMinimum = MAP_MIN_SIZE[mapTheme];
-  const modeMinimum = MODE_MIN_SIZE[gameMode];
+  const mapMinimum = MAP_PRESET_SIZE[mapTheme];
+  const modeMinimum = MODE_PRESET_SIZE[gameMode];
   return {
     width: Math.max(mapMinimum.width, modeMinimum?.width ?? 0),
     height: Math.max(mapMinimum.height, modeMinimum?.height ?? 0),
   };
+}
+
+function defaultBoardSize(mapTheme: MapThemeId, gameMode: GameMode): { width: number; height: number } {
+  return minimumBoardSize(mapTheme, gameMode);
 }
 
 async function loadFoodTextures(): Promise<Record<FoodType, Texture>> {
@@ -248,6 +253,7 @@ async function main(): Promise<void> {
   const mapSelect = document.getElementById("setting-map") as HTMLSelectElement | null;
   const modeSelect = document.getElementById("setting-mode") as HTMLSelectElement | null;
   const colorsSelect = document.getElementById("setting-colors") as HTMLSelectElement | null;
+  const interfaceSelect = document.getElementById("setting-interface") as HTMLSelectElement | null;
   const snakeSelect = document.getElementById("setting-snake") as HTMLSelectElement | null;
   const commentSpeedModeSelect = document.getElementById("setting-comment-speed-mode") as HTMLSelectElement | null;
   const commentSpeedStartInput = document.getElementById("setting-comment-speed-start") as HTMLSelectElement | null;
@@ -274,9 +280,9 @@ async function main(): Promise<void> {
   mapSelect?.addEventListener("change", () => {
     const theme = (mapSelect.value as MapThemeId) ?? DEFAULT_CONFIG.mapTheme;
     const gameMode = (modeSelect?.value as GameMode | undefined) ?? DEFAULT_CONFIG.gameMode;
-    const minSize = minimumBoardSize(theme, gameMode);
-    if (widthInput) widthInput.value = String(Math.max(Number(widthInput.value || DEFAULT_CONFIG.boardWidth), minSize.width));
-    if (heightInput) heightInput.value = String(Math.max(Number(heightInput.value || DEFAULT_CONFIG.boardHeight), minSize.height));
+    const preset = defaultBoardSize(theme, gameMode);
+    if (widthInput) widthInput.value = String(preset.width);
+    if (heightInput) heightInput.value = String(preset.height);
     if (theme !== "classic" && snakeSelect && snakeSelect.value === "smooth") {
       snakeSelect.value = "google";
     }
@@ -284,9 +290,9 @@ async function main(): Promise<void> {
   modeSelect?.addEventListener("change", () => {
     const theme = (mapSelect?.value as MapThemeId | undefined) ?? DEFAULT_CONFIG.mapTheme;
     const gameMode = (modeSelect.value as GameMode | undefined) ?? DEFAULT_CONFIG.gameMode;
-    const minSize = minimumBoardSize(theme, gameMode);
-    if (widthInput) widthInput.value = String(Math.max(Number(widthInput.value || DEFAULT_CONFIG.boardWidth), minSize.width));
-    if (heightInput) heightInput.value = String(Math.max(Number(heightInput.value || DEFAULT_CONFIG.boardHeight), minSize.height));
+    const preset = defaultBoardSize(theme, gameMode);
+    if (widthInput) widthInput.value = String(preset.width);
+    if (heightInput) heightInput.value = String(preset.height);
   });
 
   const startAudioOnce = () => {
@@ -318,6 +324,7 @@ async function main(): Promise<void> {
       mapTheme,
       gameMode,
       colorMode: (colorsSelect?.value as ColorMode | undefined) ?? DEFAULT_CONFIG.colorMode,
+      interfaceMode: (interfaceSelect?.value as InterfaceMode | undefined) ?? DEFAULT_CONFIG.interfaceMode,
       snakeStyle: (snakeSelect?.value as SnakeStyle | undefined) ?? DEFAULT_CONFIG.snakeStyle,
       commentSpeedMode: commentSpeedModeSelect?.value === "fixed" ? "fixed" : "gradual",
       commentSpeedStart: clamp(Number(commentSpeedStartInput?.value ?? 1), 1, 6),
@@ -335,6 +342,7 @@ async function main(): Promise<void> {
     if (mapSelect) mapSelect.value = config.mapTheme;
     if (modeSelect) modeSelect.value = config.gameMode;
     if (colorsSelect) colorsSelect.value = config.colorMode;
+    if (interfaceSelect) interfaceSelect.value = config.interfaceMode;
     if (snakeSelect) snakeSelect.value = config.snakeStyle;
     if (commentSpeedModeSelect) commentSpeedModeSelect.value = config.commentSpeedMode;
     if (commentSpeedStartInput) commentSpeedStartInput.value = String(config.commentSpeedStart);
@@ -353,6 +361,7 @@ async function main(): Promise<void> {
   let baseConfig: GameConfig = { ...DEFAULT_CONFIG };
   let currentConfig: GameConfig = { ...baseConfig };
   syncInputsFromConfig(baseConfig);
+  hud.setInterfaceMode(baseConfig.interfaceMode);
 
   function replaceBoard(config: GameConfig): void {
     app.stage.removeChild(board.view);
@@ -388,6 +397,7 @@ async function main(): Promise<void> {
     currentConfig = { ...config };
     currentLevel = level;
     replaceBoard(currentConfig);
+    hud.setInterfaceMode(currentConfig.interfaceMode);
     state = { ...createGame(currentConfig), level: currentLevel };
     roundVariant = pickRoundVariant(currentConfig, roundVariant);
     speed = createSpeedMeter(currentConfig.commentSpeedStart);
@@ -549,13 +559,25 @@ async function main(): Promise<void> {
       state.status === "playing" && roundStartedAt > 0
         ? performance.now() - roundStartedAt
         : roundElapsedMs;
+    const playableCells = Math.max(1, (state.config.boardWidth * state.config.boardHeight) - state.walls.size);
     hud.setSpeed(effectiveSpeed);
     hud.setCounters({
       subscribers: 0,
       victories: victoryCount,
-      breads: state.breadsEaten,
+      breads: state.score,
       timer: formatTimer(displayElapsedMs),
       level: currentLevel,
+    });
+    hud.setScene({
+      status: state.status,
+      mapTheme: state.config.mapTheme,
+      gameMode: state.config.gameMode,
+      coverage: state.snake.length / playableCells,
+      speed: effectiveSpeed,
+      snakeLength: state.snake.length,
+      queuedFoods: state.foodQueue.length,
+      direction: state.direction,
+      score: state.score,
     });
     board.update(state, effectiveSpeed);
     screens.setStatus(state.status);
