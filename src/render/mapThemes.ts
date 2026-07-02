@@ -4,13 +4,6 @@ function rgb(r: number, g: number, b: number): number {
   return (r << 16) | (g << 8) | b;
 }
 
-function normalize(pos: Vec2, config: GameConfig): { x: number; y: number } {
-  return {
-    x: config.boardWidth <= 1 ? 0 : pos.x / (config.boardWidth - 1),
-    y: config.boardHeight <= 1 ? 0 : pos.y / (config.boardHeight - 1),
-  };
-}
-
 function hslToRgb(h: number, s: number, l: number): number {
   const c = (1 - Math.abs(2 * l - 1)) * s;
   const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
@@ -28,105 +21,23 @@ function hslToRgb(h: number, s: number, l: number): number {
   return rgb(toByte(r), toByte(g), toByte(b));
 }
 
-function hexToRgb(hex: string): number {
-  return Number.parseInt(hex.replace("#", ""), 16);
+function normalize(pos: Vec2, config: GameConfig): { x: number; y: number } {
+  return {
+    x: config.boardWidth <= 1 ? 0 : pos.x / (config.boardWidth - 1),
+    y: config.boardHeight <= 1 ? 0 : pos.y / (config.boardHeight - 1),
+  };
 }
 
-function samplePalette(
-  rows: readonly string[],
-  palette: Record<string, string>,
-  pos: Vec2,
-  config: GameConfig,
-): number {
-  const { x, y } = normalize(pos, config);
-  const px = Math.min(rows[0]!.length - 1, Math.floor(x * rows[0]!.length));
-  const py = Math.min(rows.length - 1, Math.floor(y * rows.length));
-  const token = rows[py]![px]!;
-  return hexToRgb(palette[token] ?? "#101820");
+function pointInDiamond(nx: number, ny: number, cx: number, cy: number, halfWidth: number, halfHeight: number): boolean {
+  const dx = Math.abs(nx - cx) / halfWidth;
+  const dy = Math.abs(ny - cy) / halfHeight;
+  return dx + dy <= 1;
 }
 
-const HEART_ROWS = [
-  "0000000000000000",
-  "0011110000111100",
-  "0111111011111110",
-  "1111111111111111",
-  "1111111111111111",
-  "0111111111111110",
-  "0011111111111100",
-  "0001111111111000",
-  "0000111111110000",
-  "0000011111100000",
-  "0000001111000000",
-  "0000000110000000",
-  "0000000000000000",
-  "0000000000000000",
-] as const;
-
-const HEART_PALETTE: Record<string, string> = {
-  "0": "#243247",
-  "1": "#edf4fb",
-};
-
-const BRAZIL_ROWS = [
-  "GGGGGGGGGGGGGGGGGGGGGGGGGGGG",
-  "GGGGGGGGGGGGGGGGGGGGGGGGGGGG",
-  "GGGGGGGGGGGGYYGGGGGGGGGGGGGG",
-  "GGGGGGGGGYYYYYYYYYGGGGGGGGGG",
-  "GGGGGGYYYYYYYYYYYYYYYGGGGGGG",
-  "GGGGYYYYYYYYBBBBYYYYYYYYGGGG",
-  "GGGYYYYYYYBBBBBBBBYYYYYYYGGG",
-  "GGYYYYYYYWBBBBBBBBBWYYYYYYGG",
-  "GGYYYYYYYBBBBBBBBBBYYYYYYYGG",
-  "GGYYYYYYYWBBBBBBBBBWYYYYYYGG",
-  "GGGYYYYYYYBBBBBBBBYYYYYYYGGG",
-  "GGGGYYYYYYYYBBBBYYYYYYYYGGGG",
-  "GGGGGGYYYYYYYYYYYYYYYGGGGGGG",
-  "GGGGGGGGGYYYYYYYYYGGGGGGGGGG",
-  "GGGGGGGGGGGGYYGGGGGGGGGGGGGG",
-  "GGGGGGGGGGGGGGGGGGGGGGGGGGGG",
-  "GGGGGGGGGGGGGGGGGGGGGGGGGGGG",
-  "GGGGGGGGGGGGGGGGGGGGGGGGGGGG",
-] as const;
-
-const BRAZIL_PALETTE: Record<string, string> = {
-  G: "#16a14f",
-  Y: "#ffd333",
-  B: "#2440b8",
-  W: "#f6f8fb",
-};
-
-const CREEPER_ROWS = [
-  "aaaaaaaa",
-  "abcbcdca",
-  "cddeeffc",
-  "cddeeffc",
-  "cggdeehc",
-  "bcfhhhhb",
-  "achhhgba",
-  "acghhgca",
-] as const;
-
-const CREEPER_PALETTE: Record<string, string> = {
-  a: "#c4e2bd",
-  b: "#4dcc37",
-  c: "#399f45",
-  d: "#0d0d0d",
-  e: "#000000",
-  f: "#70df68",
-  g: "#8dc08f",
-  h: "#5f8c62",
-};
-
-function heartColor(pos: Vec2, config: GameConfig): number {
-  return samplePalette(HEART_ROWS, HEART_PALETTE, pos, config);
-}
-
-function brazilColor(pos: Vec2, config: GameConfig): number {
-  return samplePalette(BRAZIL_ROWS, BRAZIL_PALETTE, pos, config);
-}
-
-function creeperColor(pos: Vec2, config: GameConfig): number {
-  return samplePalette(CREEPER_ROWS, CREEPER_PALETTE, pos, config);
+function pointInCircle(nx: number, ny: number, cx: number, cy: number, radius: number): boolean {
+  const dx = nx - cx;
+  const dy = ny - cy;
+  return (dx * dx) + (dy * dy) <= radius * radius;
 }
 
 function classicColor(pos: Vec2, config: GameConfig): number {
@@ -137,10 +48,99 @@ function classicColor(pos: Vec2, config: GameConfig): number {
   return hslToRgb(hue, saturation, lightness);
 }
 
+function heartColor(pos: Vec2, config: GameConfig): number {
+  const { x, y } = normalize(pos, config);
+  const dx = x - 0.5;
+  const dy = y - 0.42;
+  const formula = Math.pow(dx * dx + dy * dy - 0.05, 3) - (dx * dx * Math.pow(dy, 3));
+  return formula <= 0 ? 0xedf4fb : 0x243247;
+}
+
+function brazilColor(pos: Vec2, config: GameConfig): number {
+  const { x, y } = normalize(pos, config);
+  const green = 0x169c4a;
+  const yellow = 0xffd33a;
+  const blue = 0x2440b8;
+  const white = 0xf5f8fb;
+
+  if (pointInDiamond(x, y, 0.5, 0.5, 0.36, 0.28)) {
+    if (pointInCircle(x, y, 0.5, 0.5, 0.18)) {
+      const bandY = 0.47 - ((x - 0.5) * 0.2);
+      const bandDistance = Math.abs(y - bandY);
+      if (bandDistance < 0.022) return white;
+
+      if (pointInCircle(x, y, 0.38, 0.44, 0.01)) return white;
+      if (pointInCircle(x, y, 0.46, 0.47, 0.009)) return white;
+      if (pointInCircle(x, y, 0.56, 0.43, 0.009)) return white;
+      if (pointInCircle(x, y, 0.61, 0.5, 0.008)) return white;
+      if (pointInCircle(x, y, 0.52, 0.56, 0.009)) return white;
+      if (pointInCircle(x, y, 0.42, 0.55, 0.008)) return white;
+
+      return blue;
+    }
+    return yellow;
+  }
+
+  return green;
+}
+
+function franceColor(pos: Vec2, config: GameConfig): number {
+  const { x } = normalize(pos, config);
+  if (x < 1 / 3) return 0x2245a3;
+  if (x < 2 / 3) return 0xf4f7fb;
+  return 0xd6223c;
+}
+
+function norwayColor(pos: Vec2, config: GameConfig): number {
+  const { x, y } = normalize(pos, config);
+  const red = 0xba2132;
+  const white = 0xf6f8fb;
+  const blue = 0x213d8c;
+
+  const whiteVertical = x >= 0.26 && x <= 0.38;
+  const whiteHorizontal = y >= 0.41 && y <= 0.59;
+  const blueVertical = x >= 0.29 && x <= 0.35;
+  const blueHorizontal = y >= 0.45 && y <= 0.55;
+
+  if (blueVertical || blueHorizontal) return blue;
+  if (whiteVertical || whiteHorizontal) return white;
+  return red;
+}
+
+function creeperColor(pos: Vec2, config: GameConfig): number {
+  const { x, y } = normalize(pos, config);
+  const px = Math.floor(x * 8);
+  const py = Math.floor(y * 8);
+  const rows = [
+    "aaaaaaaa",
+    "abcbcdca",
+    "cddeeffc",
+    "cddeeffc",
+    "cggdeehc",
+    "bcfhhhhb",
+    "achhhgba",
+    "acghhgca",
+  ] as const;
+  const palette: Record<string, number> = {
+    a: 0xc4e2bd,
+    b: 0x4dcc37,
+    c: 0x399f45,
+    d: 0x0d0d0d,
+    e: 0x000000,
+    f: 0x70df68,
+    g: 0x8dc08f,
+    h: 0x5f8c62,
+  };
+  const token = rows[Math.min(rows.length - 1, py)]![Math.min(rows[0].length - 1, px)]!;
+  return palette[token] ?? 0x101820;
+}
+
 export const MAP_THEME_LABELS: Record<MapThemeId, string> = {
   classic: "Clássico",
   heart: "Coração",
   brazil: "Bandeira do Brasil",
+  france: "Bandeira da França",
+  norway: "Bandeira da Noruega",
   creeper: "Creeper",
 };
 
@@ -150,6 +150,10 @@ export function mapCellColor(theme: MapThemeId, pos: Vec2, config: GameConfig): 
       return heartColor(pos, config);
     case "brazil":
       return brazilColor(pos, config);
+    case "france":
+      return franceColor(pos, config);
+    case "norway":
+      return norwayColor(pos, config);
     case "creeper":
       return creeperColor(pos, config);
     default:

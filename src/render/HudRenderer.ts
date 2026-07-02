@@ -34,6 +34,10 @@ function formatMapTheme(theme: MapThemeId): string {
       return "Heart";
     case "brazil":
       return "Brasil";
+    case "france":
+      return "França";
+    case "norway":
+      return "Noruega";
     case "creeper":
       return "Creeper";
     default:

@@ -14,7 +14,7 @@ export interface AvatarFood {
 
 export type FoodType = "apple_red" | "apple_gold" | "bread" | "watermelon";
 export type FoodKind = "basic" | "avatar";
-export type MapThemeId = "classic" | "heart" | "brazil" | "creeper";
+export type MapThemeId = "classic" | "heart" | "brazil" | "france" | "norway" | "creeper";
 export type GameMode = "classic" | "full_food" | "maze_race" | "maze_harvest" | "pudding";
 export type ColorMode = "gradient" | "map";
 export type SnakeStyle = "smooth" | "google";
@@ -68,8 +68,8 @@ export const DEFAULT_CONFIG: GameConfig = {
   baseSpeedMultiplier: 1,
   humanErrorRate: 0.2,
   growthEnabled: false,
-  maxBoardWidth: 18,
-  maxBoardHeight: 14,
+  maxBoardWidth: 36,
+  maxBoardHeight: 24,
 };
 
 export interface GameState {

@@ -43,6 +43,10 @@ function mixRgb(a: number, b: number, amount: number): number {
   return (rr << 16) | (rg << 8) | rb;
 }
 
+function isFlagTheme(theme: GameState["config"]["mapTheme"]): boolean {
+  return theme === "brazil" || theme === "france" || theme === "norway";
+}
+
 export class BoardRenderer {
   readonly view = new Container();
   private backgroundLayer = new Graphics();
@@ -361,7 +365,11 @@ export class BoardRenderer {
       for (let y = 0; y < state.config.boardHeight; y++) {
         const color = mapCellColor(state.config.mapTheme, { x, y }, state.config);
         const key = `${x},${y}`;
-        const alpha = state.revealedCells.has(key) ? 0.94 : 0.2;
+        const alpha = isFlagTheme(state.config.mapTheme)
+          ? 0.96
+          : state.revealedCells.has(key)
+            ? 0.94
+            : 0.2;
         this.mapLayer
           .rect(x * this.cellSize, y * this.cellSize, this.cellSize, this.cellSize)
           .fill({ color, alpha });

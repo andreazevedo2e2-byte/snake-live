@@ -30,12 +30,14 @@ const BASE_TICK_MS = 420;
 const AUTO_RESTART_DELAY_MS = 2000;
 const DEFAULT_VOLUME = 0.6;
 const CHAT_WS_URL = (import.meta.env.VITE_CHAT_WS_URL as string | undefined) ?? "ws://localhost:8787";
-const MAX_START_WIDTH = 28;
-const MAX_START_HEIGHT = 20;
+const MAX_START_WIDTH = 36;
+const MAX_START_HEIGHT = 24;
 const MAP_PRESET_SIZE: Record<MapThemeId, { width: number; height: number }> = {
   classic: { width: 10, height: 8 },
   heart: { width: 18, height: 16 },
-  brazil: { width: 28, height: 18 },
+  brazil: { width: 32, height: 20 },
+  france: { width: 24, height: 16 },
+  norway: { width: 30, height: 20 },
   creeper: { width: 20, height: 20 },
 };
 const MODE_PRESET_SIZE: Partial<Record<GameMode, { width: number; height: number }>> = {
@@ -333,8 +335,8 @@ async function main(): Promise<void> {
       baseSpeedMultiplier: clamp(Number(speedInput?.value ?? 1), 0.6, 2.4),
       gradientSpeed: clamp(Number(gradientInput?.value ?? 0.04), 0.01, 0.12),
       humanErrorRate: clamp(Number(errorsInput?.value ?? 20) / 100, 0, 1),
-      maxBoardWidth: 28,
-      maxBoardHeight: 20,
+      maxBoardWidth: 36,
+      maxBoardHeight: 24,
     };
   }
 
