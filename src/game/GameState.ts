@@ -1,5 +1,5 @@
 import { FOOD_TYPES } from "./foodCatalog";
-import { DEFAULT_CONFIG, type AvatarFood, type BoardFood, type Direction, type FoodType, type GameConfig, type GameState, type Rng, type Vec2 } from "./types";
+import { DEFAULT_CONFIG, defaultFoodGoal, type AvatarFood, type BoardFood, type Direction, type FoodType, type GameConfig, type GameState, type Rng, type Vec2 } from "./types";
 
 const DIRECTION_VECTORS: Record<Direction, Vec2> = {
   up: { x: 0, y: -1 },
@@ -102,34 +102,6 @@ function firstOpenCell(boardWidth: number, boardHeight: number, walls: Set<strin
     }
   }
   return { x: 0, y: 0 };
-}
-
-function createsSolidBlock(candidate: Vec2, walls: Set<string>, boardWidth: number, boardHeight: number): boolean {
-  for (let ox = -1; ox <= 0; ox++) {
-    for (let oy = -1; oy <= 0; oy++) {
-      const cells = [
-        { x: candidate.x + ox, y: candidate.y + oy },
-        { x: candidate.x + ox + 1, y: candidate.y + oy },
-        { x: candidate.x + ox, y: candidate.y + oy + 1 },
-        { x: candidate.x + ox + 1, y: candidate.y + oy + 1 },
-      ];
-      if (cells.some((cell) => !inBounds(cell, boardWidth, boardHeight))) continue;
-      const solid = cells.every((cell) => (cell.x === candidate.x && cell.y === candidate.y) || walls.has(cellKey(cell)));
-      if (solid) return true;
-    }
-  }
-  return false;
-}
-
-function isConnectedAfterWall(boardWidth: number, boardHeight: number, walls: Set<string>, reserved: Set<string>): boolean {
-  const preferredStarts = [...reserved].map((entry) => {
-    const [xText, yText] = entry.split(",");
-    return { x: Number(xText), y: Number(yText) };
-  });
-  const start = firstOpenCell(boardWidth, boardHeight, walls, preferredStarts);
-  const reachable = reachableCells(start, walls, boardWidth, boardHeight);
-  const openCells = (boardWidth * boardHeight) - walls.size;
-  return reachable.size === openCells;
 }
 
 function generateMazeWalls(config: GameConfig, rng: Rng): Set<string> {
@@ -247,10 +219,20 @@ function farthestReachableCell(boardWidth: number, boardHeight: number, walls: S
 }
 
 function resolveConfig(config: Partial<GameConfig>): GameConfig {
-  return {
+  const merged = {
     ...DEFAULT_CONFIG,
     ...config,
     foodTypes: config.foodTypes && config.foodTypes.length > 0 ? config.foodTypes : DEFAULT_CONFIG.foodTypes,
+  };
+  // Most callers build configs by spreading DEFAULT_CONFIG (which itself has
+  // foodGoal: null) and overriding a few fields, so plain undefined-checking
+  // can't tell "caller wants the default" from "caller inherited null from
+  // the spread." Only a concrete number counts as an explicit override —
+  // anything else re-derives the goal from the (possibly just-overridden)
+  // board size and game mode.
+  return {
+    ...merged,
+    foodGoal: typeof config.foodGoal === "number" ? config.foodGoal : defaultFoodGoal(merged),
   };
 }
 
@@ -260,7 +242,9 @@ function playableCellCount(config: GameConfig, walls: Set<string>): number {
 
 function safeSpawnCandidates(config: GameConfig, snake: Vec2[], foods: BoardFood[], walls: Set<string>): Vec2[] {
   const occupied = occupiedCells({ snake, foods, walls });
-  const bodyBlocked = new Set([...snake.slice(0, -1).map(cellKey), ...walls]);
+  // Body minus both head (the BFS start, must not be pre-blocked) and tail
+  // (vacates this tick unless the snake grows).
+  const bodyBlocked = new Set([...snake.slice(1, -1).map(cellKey), ...walls]);
   const reachable = reachableCells(snake[0]!, bodyBlocked, config.boardWidth, config.boardHeight);
 
   const free: Vec2[] = [];
@@ -275,6 +259,64 @@ function safeSpawnCandidates(config: GameConfig, snake: Vec2[], foods: BoardFood
     }
   }
   return free;
+}
+
+/** The one spawn path every food origin (initial, reposition, avatar, queue
+ * promotion) must go through: prefer a cell the head can actually reach with
+ * room to maneuver, falling back to any free cell only when the board is so
+ * packed that no such candidate exists. On walled boards, a maze corridor
+ * has no loops to circle back through, so committing to a straight dead-end
+ * stretch to reach food is the actual cause of traps — junction cells (3+
+ * open neighbors) keep an escape option open, so prefer those when any
+ * exist instead of treating every 2-neighbor corridor cell as equally safe. */
+function pickSafeSpawn(config: GameConfig, snake: Vec2[], foods: BoardFood[], walls: Set<string>, rng: Rng): Vec2 {
+  const safeCandidates = safeSpawnCandidates(config, snake, foods, walls);
+  if (safeCandidates.length > 0) {
+    if (walls.size > 0) {
+      const occupied = occupiedCells({ snake, foods, walls });
+      const junctions = safeCandidates.filter(
+        (pos) => freeNeighborCount(pos, occupied, config.boardWidth, config.boardHeight) >= 3,
+      );
+      if (junctions.length > 0) return randomChoice(junctions, rng);
+    }
+    return randomChoice(safeCandidates, rng);
+  }
+  const occupied = occupiedCells({ snake, foods, walls });
+  return randomEmptyCell(config.boardWidth, config.boardHeight, occupied, rng);
+}
+
+const STUCK_FOOD_RELOCATE_TICKS = 8;
+
+/** Self-heal: any food that stays unreachable from the head for too many
+ * consecutive ticks (e.g. sealed off by a freshly placed wall) gets moved to
+ * a safe cell instead of permanently stalling the round. */
+function relocateStuckFoods(
+  config: GameConfig,
+  snake: Vec2[],
+  foods: BoardFood[],
+  walls: Set<string>,
+  blockedTicks: Record<string, number>,
+  rng: Rng,
+): { foods: BoardFood[]; foodBlockedTicks: Record<string, number> } {
+  const bodyBlocked = new Set([...snake.slice(1, -1).map(cellKey), ...walls]);
+  const reachable = reachableCells(snake[0]!, bodyBlocked, config.boardWidth, config.boardHeight);
+
+  let nextFoods = foods;
+  const nextBlockedTicks: Record<string, number> = {};
+
+  for (const food of foods) {
+    const isReachable = reachable.has(cellKey(food.pos));
+    const count = isReachable ? 0 : (blockedTicks[food.id] ?? 0) + 1;
+    if (count >= STUCK_FOOD_RELOCATE_TICKS) {
+      const pos = pickSafeSpawn(config, snake, nextFoods, walls, rng);
+      nextFoods = nextFoods.map((entry) => (entry.id === food.id ? { ...entry, pos } : entry));
+      nextBlockedTicks[food.id] = 0;
+    } else {
+      nextBlockedTicks[food.id] = count;
+    }
+  }
+
+  return { foods: nextFoods, foodBlockedTicks: nextBlockedTicks };
 }
 
 function initialFoods(config: GameConfig, snake: Vec2[], walls: Set<string>, rng: Rng): BoardFood[] {
@@ -296,10 +338,7 @@ function initialFoods(config: GameConfig, snake: Vec2[], walls: Set<string>, rng
     return foods;
   }
 
-  const safeCandidates = safeSpawnCandidates(config, snake, [], walls);
-  const spawn = safeCandidates.length > 0
-    ? randomChoice(safeCandidates, rng)
-    : randomEmptyCell(config.boardWidth, config.boardHeight, occupied, rng);
+  const spawn = pickSafeSpawn(config, snake, [], walls, rng);
   return [
     createBasicFood(
       "food-0",
@@ -326,6 +365,9 @@ export function createGame(config: Partial<GameConfig>, rng: Rng = Math.random):
     revealedCells: new Set(snake.map(cellKey)),
     level: 1,
     walls,
+    foodBlockedTicks: {},
+    willMakeError: rng() < resolvedConfig.humanErrorRate,
+    humanErrorUsed: false,
   };
 }
 
@@ -337,6 +379,47 @@ export function setDirection(state: GameState, dir: Direction): GameState {
 
 function isOutOfBounds(pos: Vec2, boardWidth: number, boardHeight: number): boolean {
   return pos.x < 0 || pos.y < 0 || pos.x >= boardWidth || pos.y >= boardHeight;
+}
+
+/** Returns true if placing a wall at `pos` would complete a 2×2 solid block of
+ * walls. Checked by inspecting all four 2×2 grids that include `pos`. */
+function createsSolidBlock(pos: Vec2, walls: Set<string>, boardWidth: number, boardHeight: number): boolean {
+  for (let dx = 0; dx <= 1; dx++) {
+    for (let dy = 0; dy <= 1; dy++) {
+      const topLeft = { x: pos.x - dx, y: pos.y - dy };
+      let allWalls = true;
+      outer: for (let bx = 0; bx <= 1; bx++) {
+        for (let by = 0; by <= 1; by++) {
+          const cell = { x: topLeft.x + bx, y: topLeft.y + by };
+          if (!inBounds(cell, boardWidth, boardHeight)) { allWalls = false; break outer; }
+          const key = cellKey(cell);
+          if (key !== cellKey(pos) && !walls.has(key)) { allWalls = false; break outer; }
+        }
+      }
+      if (allWalls) return true;
+    }
+  }
+  return false;
+}
+
+/** Returns true if all non-wall cells remain in one connected component after
+ * placing a wall at `pos`. Prevents isolated pockets where food could get
+ * permanently trapped even if the snake itself can still reach all current
+ * food positions. */
+function isConnectedAfterWall(pos: Vec2, walls: Set<string>, boardWidth: number, boardHeight: number): boolean {
+  const newWalls = new Set([...walls, cellKey(pos)]);
+  let start: Vec2 | null = null;
+  let totalFree = 0;
+  for (let x = 0; x < boardWidth; x++) {
+    for (let y = 0; y < boardHeight; y++) {
+      if (!newWalls.has(`${x},${y}`)) {
+        if (!start) start = { x, y };
+        totalFree++;
+      }
+    }
+  }
+  if (!start || totalFree === 0) return false;
+  return reachableCells(start, newWalls, boardWidth, boardHeight).size === totalFree;
 }
 
 function maybeAddPuddingWall(state: GameState, snake: Vec2[], foods: BoardFood[], rng: Rng): Set<string> {
@@ -353,14 +436,12 @@ function maybeAddPuddingWall(state: GameState, snake: Vec2[], foods: BoardFood[]
       if (blocked.has(key)) continue;
       if (Math.abs(pos.x - snake[0]!.x) + Math.abs(pos.y - snake[0]!.y) <= 3) continue;
       if (neighbors4(pos).some((neighbor) => state.walls.has(cellKey(neighbor)))) continue;
-      const occupiedIfPlaced = new Set([...blocked, key]);
       if (freeNeighborCount(pos, blocked, state.config.boardWidth, state.config.boardHeight) < 2) continue;
-      const reachableAfterPlacement = reachableCells(snake[0]!, new Set([...snake.slice(0, -1).map(cellKey), ...state.walls, key]), state.config.boardWidth, state.config.boardHeight);
+      if (createsSolidBlock(pos, state.walls, state.config.boardWidth, state.config.boardHeight)) continue;
+      if (!isConnectedAfterWall(pos, state.walls, state.config.boardWidth, state.config.boardHeight)) continue;
+      const reachableAfterPlacement = reachableCells(snake[0]!, new Set([...snake.slice(1, -1).map(cellKey), ...state.walls, key]), state.config.boardWidth, state.config.boardHeight);
       if (reachableAfterPlacement.size < snake.length + 10) continue;
       if (foods.some((food) => !reachableAfterPlacement.has(cellKey(food.pos)))) continue;
-      const borderTrap = (pos.x === 1 || pos.y === 1 || pos.x === state.config.boardWidth - 2 || pos.y === state.config.boardHeight - 2)
-        && freeNeighborCount(pos, occupiedIfPlaced, state.config.boardWidth, state.config.boardHeight) < 2;
-      if (borderTrap) continue;
       candidates.push(pos);
     }
   }
@@ -372,11 +453,7 @@ function maybeAddPuddingWall(state: GameState, snake: Vec2[], foods: BoardFood[]
 function ensureBasicFood(state: GameState, rng: Rng): BoardFood[] {
   if (state.config.gameMode === "full_food" || state.config.gameMode === "maze_race") return state.foods;
   if (state.foods.some((food) => food.kind === "basic")) return state.foods;
-  const occupied = occupiedCells(state);
-  const safeCandidates = safeSpawnCandidates(state.config, state.snake, state.foods, state.walls);
-  const pos = safeCandidates.length > 0
-    ? randomChoice(safeCandidates, rng)
-    : randomEmptyCell(state.config.boardWidth, state.config.boardHeight, occupied, rng);
+  const pos = pickSafeSpawn(state.config, state.snake, state.foods, state.walls, rng);
   return [
     ...state.foods,
     createBasicFood(`food-${state.score}-${state.snake.length}`, pos, randomFoodType(state.config, rng)),
@@ -386,8 +463,7 @@ function ensureBasicFood(state: GameState, rng: Rng): BoardFood[] {
 function promoteQueuedFood(state: GameState, foods: BoardFood[], queue: BoardFood[], rng: Rng): { foods: BoardFood[]; queue: BoardFood[] } {
   if (queue.length === 0) return { foods, queue };
   const [promoted, ...rest] = queue;
-  const occupied = occupiedCells({ snake: state.snake, foods, walls: state.walls });
-  const pos = randomEmptyCell(state.config.boardWidth, state.config.boardHeight, occupied, rng);
+  const pos = pickSafeSpawn(state.config, state.snake, foods, state.walls, rng);
   return {
     foods: [...foods, { ...promoted, pos }],
     queue: rest,
@@ -425,29 +501,11 @@ export function tick(state: GameState, rng: Rng = Math.random): GameState {
   const revealedCells = new Set(state.revealedCells);
   revealedCells.add(cellKey(nextHead));
 
-  if (eatenFood && state.config.gameMode === "maze_race") {
-    return {
-      ...state,
-      snake: newSnake,
-      direction,
-      pendingDirection: null,
-      status: "victory",
-      score: state.score + 1,
-      breadsEaten: state.breadsEaten + (eatenFood.type === "bread" ? 1 : 0),
-      revealedCells,
-    };
-  }
-
-  if (newSnake.length >= playableCellCount(state.config, state.walls)) {
-    return {
-      ...state,
-      snake: newSnake,
-      direction,
-      pendingDirection: null,
-      status: "victory",
-      revealedCells,
-    };
-  }
+  // maze_race's only "basic" food is the single target fruit placed at the
+  // maze's farthest reachable cell (ensureBasicFood skips this mode, so no
+  // other basic food ever spawns) — avatar foods from chat score and get
+  // eaten normally below, but only the target ends the round.
+  const eatsMazeRaceTarget = Boolean(eatenFood) && state.config.gameMode === "maze_race" && eatenFood!.kind === "basic";
 
   let foods = state.foods;
   let foodQueue = state.foodQueue;
@@ -467,7 +525,13 @@ export function tick(state: GameState, rng: Rng = Math.random): GameState {
     walls = maybeAddPuddingWall(state, newSnake, foods, rng);
   }
 
-  if (newSnake.length >= playableCellCount(state.config, walls)) {
+  // Three ways to win: the board is completely full (small classic/full_food
+  // boards, or a rare early full-clear), the round has a food-count goal
+  // (large open boards and every walled mode) and just reached it, or —
+  // maze_race only — the target fruit itself was just eaten.
+  const boardFilled = newSnake.length >= playableCellCount(state.config, walls);
+  const goalReached = state.config.foodGoal !== null && score >= state.config.foodGoal;
+  if (boardFilled || goalReached || eatsMazeRaceTarget) {
     return {
       ...state,
       snake: newSnake,
@@ -484,18 +548,26 @@ export function tick(state: GameState, rng: Rng = Math.random): GameState {
   }
 
   const ensuredFoods = ensureBasicFood({ ...state, snake: newSnake, foods, walls }, rng);
+  // relocateStuckFoods exists only to recover from a pudding wall sealing off food
+  // permanently. On wall-less boards (and on maze boards where walls are static and
+  // food is always placed reachably), temporary body-blocking resolves on its own —
+  // running this there would spuriously teleport the apple mid-game.
+  const healed = state.config.gameMode === "pudding"
+    ? relocateStuckFoods(state.config, newSnake, ensuredFoods, walls, state.foodBlockedTicks, rng)
+    : { foods: ensuredFoods, foodBlockedTicks: state.foodBlockedTicks };
 
   return {
     ...state,
     snake: newSnake,
     direction,
     pendingDirection: null,
-    foods: ensuredFoods,
+    foods: healed.foods,
     foodQueue,
     score,
     breadsEaten,
     revealedCells,
     walls,
+    foodBlockedTicks: healed.foodBlockedTicks,
   };
 }
 
@@ -510,8 +582,7 @@ export function enqueueAvatarFood(state: GameState, food: Omit<AvatarFood, "pos"
   };
   const avatarCount = state.foods.filter((entry) => entry.kind === "avatar").length;
   if (avatarCount < state.config.maxAvatarFoods) {
-    const occupied = occupiedCells(state);
-    const pos = randomEmptyCell(state.config.boardWidth, state.config.boardHeight, occupied, rng);
+    const pos = pickSafeSpawn(state.config, state.snake, state.foods, state.walls, rng);
     return { ...state, foods: [...state.foods, { ...avatarFood, pos }] };
   }
   return { ...state, foodQueue: [...state.foodQueue, avatarFood] };

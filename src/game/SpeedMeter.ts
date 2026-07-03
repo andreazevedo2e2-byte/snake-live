@@ -1,5 +1,14 @@
 export const MIN_MULTIPLIER = 1;
 export const MAX_MULTIPLIER = 6;
+/** Hard ceiling for the product speed.multiplier × config.baseSpeedMultiplier.
+ * Above this the tick interval drops below ~70 ms — faster than the snake
+ * animation's minimum frame time, making the game an unreadable blur. */
+export const MAX_EFFECTIVE_SPEED = 6;
+
+/** Returns the effective tick speed after applying the ceiling. */
+export function cappedEffectiveSpeed(chatMultiplier: number, baseMultiplier: number): number {
+  return Math.min(chatMultiplier * baseMultiplier, MAX_EFFECTIVE_SPEED);
+}
 const MAX_CHARGE = 50;
 const CHARGE_PER_COMMENT = 1;
 

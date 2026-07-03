@@ -13,16 +13,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/andreazevedo121/snake-live.git"
+    "url": "git+https://github.com/andreazevedo2e2-byte/snake-live.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
   "bugs": {
-    "url": "https://github.com/andreazevedo121/snake-live/issues"
+    "url": "https://github.com/andreazevedo2e2-byte/snake-live/issues"
   },
-  "homepage": "https://github.com/andreazevedo121/snake-live#readme",
+  "homepage": "https://github.com/andreazevedo2e2-byte/snake-live#readme",
   "devDependencies": {
     "@types/howler": "^2.2.13",
     "@types/node": "^26.0.0",

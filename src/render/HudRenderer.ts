@@ -71,7 +71,7 @@ export class HudRenderer {
   private liveChrome = new Graphics();
   private liveSpeedBarFill = new Graphics();
   private liveSpeedLabel = label(`x${MIN_MULTIPLIER.toFixed(1)}`, 30, COLORS.speedBarFill);
-  private liveSubsText = label("SUBS 0", 30);
+  private liveBadgeText = label("Classic - Classic run", 22, 0x89f7ff);
   private liveWinsText = label("WINS 0", 30, COLORS.heroGold);
   private liveFoodText = label("FOOD 0", 22, COLORS.heroGold);
   private liveTimerText = label("00:00.000", 22, COLORS.hud);
@@ -128,6 +128,7 @@ export class HudRenderer {
     queuedFoods: 0,
     direction: "right" as Direction,
     score: 0,
+    foodGoal: null as number | null,
   };
 
   constructor(private avatarCache: TextureCache<Texture>) {
@@ -192,6 +193,7 @@ export class HudRenderer {
     queuedFoods: number;
     direction: Direction;
     score: number;
+    foodGoal: number | null;
   }): void {
     this.scene = scene;
     this.updateShortsTexts();
@@ -304,8 +306,8 @@ export class HudRenderer {
     live.x = 74;
     live.y = 38;
 
-    this.liveSubsText.x = 220;
-    this.liveSubsText.y = 41;
+    this.liveBadgeText.x = 220;
+    this.liveBadgeText.y = 44;
     this.liveWinsText.x = 420;
     this.liveWinsText.y = 41;
     this.liveFoodText.x = 560;
@@ -371,7 +373,7 @@ export class HudRenderer {
     this.liveContainer.addChild(
       this.liveChrome,
       live,
-      this.liveSubsText,
+      this.liveBadgeText,
       this.liveWinsText,
       this.liveFoodText,
       this.liveTimerText,
@@ -463,7 +465,6 @@ export class HudRenderer {
   }
 
   private updateCounterTexts(): void {
-    this.liveSubsText.text = `SUBS ${this.counters.subscribers.toLocaleString("en-US")}`;
     this.liveWinsText.text = `WINS ${this.counters.victories.toLocaleString("en-US")}`;
     this.liveFoodText.text = `FOOD ${this.counters.breads.toLocaleString("en-US")}`;
     this.liveTimerText.text = this.counters.timer;
@@ -475,20 +476,28 @@ export class HudRenderer {
   }
 
   private updateShortsTexts(): void {
-    const coverage = clamp(this.scene.coverage, 0, 1);
-    const coveragePct = Math.round(coverage * 100);
+    const { foodGoal } = this.scene;
+    // A round with a food goal measures progress by score, not board
+    // coverage — the board itself may never fill (large maps, or walls
+    // eating into the playable space in maze/pudding modes).
+    const progress = foodGoal !== null ? clamp(this.scene.score / foodGoal, 0, 1) : clamp(this.scene.coverage, 0, 1);
+    const progressLabel = foodGoal !== null ? `GOAL ${this.scene.score}/${foodGoal}` : `BOARD ${Math.round(progress * 100)}%`;
     const mapLabel = formatMapTheme(this.scene.mapTheme);
     const modeLabel = formatGameMode(this.scene.gameMode);
 
     this.shortsMapModeText.text = `${mapLabel} - ${modeLabel}`;
-    this.shortsCoverageText.text = `BOARD ${coveragePct}%`;
+    this.liveBadgeText.text = `${mapLabel} - ${modeLabel}`;
+    this.shortsCoverageText.text = progressLabel;
     this.shortsSpeedText.text = `SPEED x${this.scene.speed.toFixed(1)}`;
     this.shortsSupportText.text = `Length ${this.scene.snakeLength} - Queue ${this.scene.queuedFoods}`;
     this.shortsMetaText.text = `Food ${this.scene.score} - ${mapLabel} - ${modeLabel}`;
 
+    const coverage = progress; // headline/bar thresholds below read on progress either way
     if (this.scene.status === "victory") {
-      this.shortsHeadlineText.text = "BOARD CLEARED";
-      this.shortsSublineText.text = "Full coverage locked in. A fresh run starts right after the win.";
+      this.shortsHeadlineText.text = foodGoal !== null ? "GOAL REACHED" : "BOARD CLEARED";
+      this.shortsSublineText.text = foodGoal !== null
+        ? `Food goal of ${foodGoal} hit. A fresh run starts right after the win.`
+        : "Full coverage locked in. A fresh run starts right after the win.";
     } else if (this.scene.status === "lost") {
       this.shortsHeadlineText.text = "ROUGH RESET";
       this.shortsSublineText.text = "The line clipped out. Another attempt starts in two seconds.";

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { createSpeedMeter, addComment, decay, MIN_MULTIPLIER, MAX_MULTIPLIER } from "./SpeedMeter";
+import { createSpeedMeter, addComment, decay, cappedEffectiveSpeed, MIN_MULTIPLIER, MAX_MULTIPLIER, MAX_EFFECTIVE_SPEED } from "./SpeedMeter";
 
 describe("SpeedMeter", () => {
   test("starts at the minimum multiplier", () => {
@@ -42,5 +42,26 @@ describe("SpeedMeter", () => {
     let meter = createSpeedMeter();
     meter = decay(meter, 1000);
     expect(meter.multiplier).toBeGreaterThanOrEqual(MIN_MULTIPLIER);
+  });
+});
+
+describe("cappedEffectiveSpeed", () => {
+  test("chat max (6×) × base 1.0 stays at 6", () => {
+    expect(cappedEffectiveSpeed(MAX_MULTIPLIER, 1.0)).toBe(6);
+  });
+
+  test("chat max (6×) × base 2.4 is capped at MAX_EFFECTIVE_SPEED (6), not 14.4", () => {
+    expect(cappedEffectiveSpeed(MAX_MULTIPLIER, 2.4)).toBe(MAX_EFFECTIVE_SPEED);
+  });
+
+  test("below the ceiling the product is returned as-is", () => {
+    expect(cappedEffectiveSpeed(2, 1.5)).toBe(3);
+  });
+
+  test("tick interval at capped speed never goes below BASE_TICK_MS / MAX_EFFECTIVE_SPEED", () => {
+    const BASE_TICK_MS = 420;
+    const minInterval = BASE_TICK_MS / MAX_EFFECTIVE_SPEED;
+    const worstCaseInterval = BASE_TICK_MS / cappedEffectiveSpeed(MAX_MULTIPLIER, 99);
+    expect(worstCaseInterval).toBeGreaterThanOrEqual(minInterval);
   });
 });

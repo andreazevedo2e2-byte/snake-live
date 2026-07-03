@@ -149,6 +149,7 @@ function cycleForwardStep(
   order: number[],
   legal: Direction[],
   w: number,
+  fill: number = 0,
 ): Direction | null {
   const head = state.snake[0]!;
   const tail = state.snake[state.snake.length - 1]!;
@@ -162,7 +163,12 @@ function cycleForwardStep(
     const pos = { x: head.x + v.x, y: head.y + v.y };
     if (!isFood(pos, state)) continue;
     const forward = (cycleIndex(order, pos, w) - headOrder + n) % n;
-    if (forward > 0 && forward < distToTail) return dir;
+    if (forward <= 0 || forward >= distToTail) continue;
+    // In the endgame, only eat food that is exactly the next cycle step.
+    // Eating adjacent food at forward > 1 silently skips cycle positions
+    // that are still empty; those cells then require a full extra loop.
+    if (fill > 0.88 && forward > 1) continue;
+    return dir;
   }
 
   if (distToTail > 1) {
@@ -223,6 +229,50 @@ function cycleShortcutPath(state: GameState, order: number[], w: number, h: numb
     cur = parent.get(key(cur));
   }
   return path;
+}
+
+/** BFS shortest-path first step toward the nearest food, walls-aware,
+ * without the deep "can the snake reach its own tail after eating" check —
+ * that check assumes an open board with loops to circle back through, which
+ * doesn't hold in a maze (a spanning tree has no loops, so committing to any
+ * corridor longer than the snake's own length routinely fails it even when
+ * the corridor is a perfectly fine dead end to eat in and back out of one
+ * cell at a time). Used for walled boards, where the real risk is a handful
+ * of genuinely short dead ends — a `legalDirections`-only 1-step guard plus
+ * occasional losses (already an accepted outcome elsewhere in this file) is
+ * far better than refusing every path and stalling forever, which was the
+ * actual bug this replaces. */
+function shortestFirstStepToward(state: GameState, w: number, h: number, targets: Vec2[]): Direction | null {
+  const head = state.snake[0]!;
+  const targetSet = new Set(targets.map(key));
+  if (targetSet.has(key(head))) return null;
+
+  const blocked = new Set([...state.snake.slice(0, -1).map(key), ...state.walls]);
+  const seen = new Set<string>([key(head)]);
+  const queue: { pos: Vec2; first: Direction }[] = [];
+  for (const dir of DIRECTIONS) {
+    const v = DIRECTION_VECTORS[dir];
+    const pos = { x: head.x + v.x, y: head.y + v.y };
+    const posKey = key(pos);
+    if (!inBounds(pos, w, h) || seen.has(posKey) || blocked.has(posKey)) continue;
+    seen.add(posKey);
+    queue.push({ pos, first: dir });
+  }
+
+  let qi = 0;
+  while (qi < queue.length) {
+    const { pos, first } = queue[qi++]!;
+    if (targetSet.has(key(pos))) return first;
+    for (const dir of DIRECTIONS) {
+      const v = DIRECTION_VECTORS[dir];
+      const np = { x: pos.x + v.x, y: pos.y + v.y };
+      const npKey = key(np);
+      if (!inBounds(np, w, h) || seen.has(npKey) || blocked.has(npKey)) continue;
+      seen.add(npKey);
+      queue.push({ pos: np, first });
+    }
+  }
+  return null;
 }
 
 function shortestSafePathToFood(state: GameState, w: number, h: number): Vec2[] | null {
@@ -515,58 +565,68 @@ function simulatePath(state: GameState, path: Vec2[]): Vec2[] | null {
 
 export function decideMove(
   state: GameState,
-  speedMultiplier = 1,
   rng: Rng = Math.random,
   variant?: CycleVariant,
 ): Direction {
   const w = state.config.boardWidth;
   const h = state.config.boardHeight;
   const hasWalls = state.walls.size > 0;
-  const prefersExploration = state.config.colorMode === "map" || state.config.gameMode === "full_food";
   const legal = legalDirections(state);
   if (legal.length === 0) return state.direction;
 
-  void speedMultiplier;
   const isSafe = (dir: Direction): boolean => {
     const sim = simulateMove(state, dir);
     return canReachOwnTail(sim, w, h, state.walls) && floodFillFrom(sim, w, h, state.walls) >= sim.length;
   };
 
-  const order = hasWalls || prefersExploration ? null : getCycle(w, h, variant ?? variantForBoard(w, h));
+  // Every wall-free board (classic, full_food, any map theme or color mode)
+  // uses the same cycle-with-shortcuts strategy: it's the only one proven to
+  // always finish, and it also happens to be the perfect explorer for map
+  // reveal themes and the guaranteed-100% solver for full_food.
+  const order = hasWalls ? null : getCycle(w, h, variant ?? variantForBoard(w, h));
   const playableCells = Math.max(1, (w * h) - state.walls.size);
   const fill = state.snake.length / playableCells;
 
-  const directPath = shortestSafePathToFood(state, w, h);
-  if (directPath && directPath.length > 0 && (hasWalls || state.score < 3)) {
-    const firstDir = directionBetween(state.snake[0]!, directPath[0]!);
-    if (legal.includes(firstDir)) return firstDir;
-  }
+  if (hasWalls) {
+    // A maze's corridors are a spanning tree (no loops), so the recursive
+    // lookahead in shortestProjectedFoodPathToFood — "is there a sequence of
+    // future moves that eventually restores safety" — is what actually
+    // matters here, not a single-snapshot floodfill/tail check that can't
+    // account for the tail vacating cells as the snake keeps moving.
+    const projectedPath = shortestProjectedFoodPathToFood(state, w, h);
+    if (projectedPath && projectedPath.length > 0) {
+      const firstDir = directionBetween(state.snake[0]!, projectedPath[0]!);
+      if (legal.includes(firstDir)) return firstDir;
+    }
 
-  if (hasWalls || prefersExploration) {
-    const naturalMove = chooseNaturalSpaceMove(state, legal, w, h, rng);
-    if (naturalMove && isSafe(naturalMove)) return naturalMove;
-
+    // No comfortably safe path to any food (tight maze, or the only
+    // reachable food sits in a pocket that's nearly full of the snake's own
+    // body) — chase the tail instead of forcing the issue. This both keeps
+    // moving (no stalling) and buys time: the tail vacates cells as it
+    // goes, so the same food often becomes safely reachable again shortly,
+    // or a fresh one spawns somewhere better.
     const tailPath = shortestPathToTail(state.snake, w, h, state.walls);
     if (tailPath && tailPath.length > 0) {
       const firstDir = directionBetween(state.snake[0]!, tailPath[0]!);
-      if (legal.includes(firstDir) && isSafe(firstDir)) return firstDir;
+      if (legal.includes(firstDir)) return firstDir;
     }
 
-    const bestSafe = legal
-      .filter(isSafe)
-      .map((dir) => {
-        const sim = simulateMove(state, dir);
-        const nextHead = sim[0]!;
-        return {
-          dir,
-          space: floodFillFrom(sim, w, h, state.walls),
-          distance: distanceToNearestFood(nextHead, state),
-        };
-      })
-      .sort((a, b) => (b.space - a.space) || (a.distance - b.distance))[0];
-    if (bestSafe) return bestSafe.dir;
+    // No tail path either (snake already boxed into a dead end) — take
+    // whatever's left rather than freezing; occasional losses here are the
+    // accepted tradeoff, same as elsewhere in this file.
+    const foodDir = shortestFirstStepToward(state, w, h, state.foods.map((food) => food.pos));
+    if (foodDir && legal.includes(foodDir)) return foodDir;
 
-    return legal[0] ?? state.direction;
+    const bestSafe = legal
+      .map((dir) => ({ dir, space: floodFillFrom(simulateMove(state, dir), w, h, state.walls) }))
+      .sort((a, b) => b.space - a.space)[0];
+    return bestSafe?.dir ?? legal[0] ?? state.direction;
+  }
+
+  const directPath = shortestSafePathToFood(state, w, h);
+  if (directPath && directPath.length > 0 && state.score < 3) {
+    const firstDir = directionBetween(state.snake[0]!, directPath[0]!);
+    if (legal.includes(firstDir)) return firstDir;
   }
 
   const projectedPath = state.score < 3 && fill < 0.08
@@ -593,13 +653,22 @@ export function decideMove(
   }
 
   if (order) {
-    const shortcut = cycleShortcutPath(state, order, w, h);
-    if (shortcut && shortcut.length > 0) {
-      const firstDir = directionBetween(state.snake[0]!, shortcut[0]!);
-      if (legal.includes(firstDir) && isSafe(firstDir)) return firstDir;
+    // Shortcuts are safe in the mid-game: the BFS in cycleShortcutPath only
+    // visits cells with cycle rank in (headRank, tailRank), which are all
+    // empty by the Hamiltonian invariant. No floodFill check is needed —
+    // floodFillFrom would incorrectly reject safe shortcuts when the body
+    // forms U-shapes that partition free cells in the current snapshot.
+    // In the endgame (>88% fill) shortcuts are disabled: the few remaining
+    // empty cells would be skipped and need an extra full loop to revisit.
+    if (fill <= 0.88) {
+      const shortcut = cycleShortcutPath(state, order, w, h);
+      if (shortcut && shortcut.length > 0) {
+        const firstDir = directionBetween(state.snake[0]!, shortcut[0]!);
+        if (legal.includes(firstDir)) return firstDir;
+      }
     }
 
-    const cycleDir = cycleForwardStep(state, order, legal, w);
+    const cycleDir = cycleForwardStep(state, order, legal, w, fill);
     if (cycleDir) return cycleDir;
   }
 

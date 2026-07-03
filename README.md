@@ -30,11 +30,23 @@ npm test       # roda a suíte de testes (vitest)
 npm run dev    # frontend (vite) + backend de chat juntos
 ```
 
-Por padrão o backend usa um chat falso (`FakeChatSource`) pra ensaiar sem estar ao vivo.
-Pra ler o chat real de uma live, defina a URL antes de rodar o backend:
+A fonte de chat é controlada pela variável `SNAKE_CHAT`:
+
+| `SNAKE_CHAT` | Comportamento |
+|---|---|
+| `fake` (padrão) | Gera comentários simulados a cada ~1,5 s — modo ensaio |
+| `silent` | Servidor sobe sem emitir eventos — útil pra testes de UI isolados |
+| `youtube` | Lê o chat ao vivo de `SNAKE_LIVE_URL` |
 
 ```bash
-SNAKE_LIVE_URL="https://www.youtube.com/watch?v=SEU_VIDEO_ID" npm run dev:server
+# Ensaio (padrão — FakeChatSource já ativo, sem precisar definir nada)
+npm run dev
+
+# Silencioso
+SNAKE_CHAT=silent npm run dev:server
+
+# Ao vivo
+SNAKE_CHAT=youtube SNAKE_LIVE_URL="https://www.youtube.com/watch?v=SEU_VIDEO_ID" npm run dev:server
 ```
 
 ## Stack

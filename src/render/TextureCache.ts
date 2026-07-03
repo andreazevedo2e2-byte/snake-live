@@ -64,6 +64,9 @@ export class TextureCache<T> {
     return entry.promise;
   }
 
+  /** Number of URLs currently tracked (loaded or loading). Useful in tests. */
+  get entryCount(): number { return this.entries.size; }
+
   release(url: string, onEvict?: (texture: T) => void): void {
     const entry = this.entries.get(url);
     if (!entry) return;

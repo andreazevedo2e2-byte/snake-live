@@ -3,20 +3,19 @@ import { createGame, enqueueAvatarFood, nextGrowthConfig, setDirection, tick } f
 import {
   DEFAULT_CONFIG,
   type ColorMode,
-  type Direction,
   type FoodType,
   type GameConfig,
   type GameMode,
-  type GameState,
   type InterfaceMode,
   type MapThemeId,
   type SnakeStyle,
-  type Vec2,
 } from "./game/types";
 import { decideMove } from "./autopilot/decideMove";
+import { isErrorPhase, pickDeliberateMistake } from "./autopilot/humanError";
 import { availableVariants, type CycleVariant } from "./autopilot/hamiltonian";
-import { addComment, createSpeedMeter, decay } from "./game/SpeedMeter";
+import { addComment, cappedEffectiveSpeed, createSpeedMeter, decay } from "./game/SpeedMeter";
 import { createLeaderboard, creditViewer, getHero, topViewers } from "./game/Leaderboard";
+import { hasStalledTooLong } from "./game/watchdog";
 import { BoardRenderer } from "./render/BoardRenderer";
 import { HudRenderer } from "./render/HudRenderer";
 import { ScreensRenderer } from "./render/ScreensRenderer";
@@ -46,130 +45,12 @@ const MODE_PRESET_SIZE: Partial<Record<GameMode, { width: number; height: number
   pudding: { width: 16, height: 12 },
 };
 
-const DIRECTION_VECTORS: Record<Direction, Vec2> = {
-  up: { x: 0, y: -1 },
-  down: { x: 0, y: 1 },
-  left: { x: -1, y: 0 },
-  right: { x: 1, y: 0 },
-};
-
-const OPPOSITE: Record<Direction, Direction> = {
-  up: "down",
-  down: "up",
-  left: "right",
-  right: "left",
-};
-
 const FOOD_TEXTURE_URLS: Record<FoodType, string> = {
   apple_red: "/assets/foods/apple-red.png",
   apple_gold: "/assets/foods/apple-gold.png",
   bread: "/assets/foods/bread.png",
   watermelon: "/assets/foods/watermelon.png",
 };
-
-function posKey(pos: Vec2): string {
-  return `${pos.x},${pos.y}`;
-}
-
-function inBounds(pos: Vec2, state: GameState): boolean {
-  return pos.x >= 0 && pos.y >= 0 && pos.x < state.config.boardWidth && pos.y < state.config.boardHeight;
-}
-
-function isFoodAt(pos: Vec2, state: GameState): boolean {
-  return state.foods.some((food) => food.pos.x === pos.x && food.pos.y === pos.y);
-}
-
-function simulateSnakeAfterMove(state: GameState, direction: Direction): Vec2[] | null {
-  if (state.snake.length > 1 && direction === OPPOSITE[state.direction]) return null;
-  const head = state.snake[0]!;
-  const vec = DIRECTION_VECTORS[direction];
-  const nextHead = { x: head.x + vec.x, y: head.y + vec.y };
-  if (!inBounds(nextHead, state)) return null;
-  if (state.walls.has(posKey(nextHead))) return null;
-
-  const grows = isFoodAt(nextHead, state);
-  const bodyToCheck = grows ? state.snake : state.snake.slice(0, -1);
-  if (bodyToCheck.some((segment) => segment.x === nextHead.x && segment.y === nextHead.y)) return null;
-  return grows ? [nextHead, ...state.snake] : [nextHead, ...state.snake.slice(0, -1)];
-}
-
-function reachableSpace(snake: Vec2[], state: GameState): number {
-  const head = snake[0]!;
-  const blocked = new Set(snake.slice(0, -1).map(posKey));
-  const seen = new Set<string>([posKey(head)]);
-  const queue: Vec2[] = [head];
-  let cursor = 0;
-  while (cursor < queue.length) {
-    const current = queue[cursor++]!;
-    for (const direction of Object.keys(DIRECTION_VECTORS) as Direction[]) {
-      const vec = DIRECTION_VECTORS[direction];
-      const next = { x: current.x + vec.x, y: current.y + vec.y };
-      const key = posKey(next);
-      if (!inBounds(next, state) || blocked.has(key) || seen.has(key) || state.walls.has(key)) continue;
-      seen.add(key);
-      queue.push(next);
-    }
-  }
-  return seen.size;
-}
-
-function nearestFoodDistance(state: GameState, pos: Vec2): number {
-  if (state.foods.length === 0) return 999;
-  return Math.min(...state.foods.map((food) => Math.abs(food.pos.x - pos.x) + Math.abs(food.pos.y - pos.y)));
-}
-
-function nextHeadForDirection(state: GameState, direction: Direction): Vec2 {
-  const head = state.snake[0]!;
-  const vec = DIRECTION_VECTORS[direction];
-  return { x: head.x + vec.x, y: head.y + vec.y };
-}
-
-function detectRepetitionLoop(history: string[]): boolean {
-  if (history.length < 16) return false;
-  const recent = history.slice(-16);
-  const uniqueStates = new Set(recent);
-  const uniqueHeads = new Set(recent.map((entry) => entry.split("|")[0]!));
-  return uniqueStates.size <= 8 || uniqueHeads.size <= 6;
-}
-
-function pickLoopBreakerDirection(state: GameState, currentDirection: Direction, history: string[]): Direction | null {
-  let best: { direction: Direction; score: number } | null = null;
-  const recent = history.slice(-18);
-
-  for (const direction of Object.keys(DIRECTION_VECTORS) as Direction[]) {
-    const snake = simulateSnakeAfterMove(state, direction);
-    if (!snake) continue;
-
-    const head = snake[0]!;
-    const signature = `${head.x},${head.y}|${direction}`;
-    const repeats = recent.filter((entry) => entry === signature).length;
-    const space = reachableSpace(snake, state);
-    const foodDistance = nearestFoodDistance(state, head);
-    const unrevealedBonus = state.revealedCells.has(posKey(head)) ? 0 : 5;
-    const turnBias = direction === currentDirection ? -1.2 : 0;
-    const score = space * 1.15 - foodDistance * 2.6 - repeats * 8 + unrevealedBonus + turnBias;
-
-    if (!best || score > best.score) best = { direction, score };
-  }
-
-  return best?.direction ?? null;
-}
-
-function pickDifficultHumanMistake(state: GameState, correctDirection: Direction): Direction | null {
-  const fill = state.snake.length / (state.config.boardWidth * state.config.boardHeight);
-  if (fill < 0.72) return null;
-
-  let worst: { direction: Direction; space: number } | null = null;
-  for (const direction of Object.keys(DIRECTION_VECTORS) as Direction[]) {
-    if (direction === correctDirection) continue;
-    const snake = simulateSnakeAfterMove(state, direction);
-    if (!snake) continue;
-    const space = reachableSpace(snake, state);
-    if (space > state.snake.length + 8) continue;
-    if (!worst || space < worst.space) worst = { direction, space };
-  }
-  return worst?.direction ?? null;
-}
 
 async function loadMusicPlaylist(): Promise<string[]> {
   try {
@@ -247,6 +128,7 @@ async function main(): Promise<void> {
   const screens = new ScreensRenderer();
   let board = new BoardRenderer(DEFAULT_CONFIG.boardWidth, DEFAULT_CONFIG.boardHeight, avatarCache, foodTextures);
   app.stage.addChild(board.view, hud.view, screens.view);
+  screens.setBoardConfig(DEFAULT_CONFIG.boardWidth, DEFAULT_CONFIG.boardHeight);
 
   const settingsToggle = document.getElementById("settings-toggle") as HTMLButtonElement | null;
   const settingsPanel = document.getElementById("settings-panel") as HTMLFormElement | null;
@@ -367,9 +249,10 @@ async function main(): Promise<void> {
 
   function replaceBoard(config: GameConfig): void {
     app.stage.removeChild(board.view);
-    board.view.destroy({ children: true });
+    board.destroy();
     board = new BoardRenderer(config.boardWidth, config.boardHeight, avatarCache, foodTextures);
     app.stage.addChildAt(board.view, 0);
+    screens.setBoardConfig(config.boardWidth, config.boardHeight);
   }
 
   function pickRoundVariant(config: GameConfig, previous: CycleVariant): CycleVariant {
@@ -387,12 +270,13 @@ async function main(): Promise<void> {
   let victoryCount = 0;
   let currentLevel = 1;
   let lastSpeedMilestone = 1;
-  let shouldFailThisRound = Math.random() < currentConfig.humanErrorRate;
-  let failureUsedThisRound = false;
-  let ticksWithoutScore = 0;
+  // Pure safety net: a healthy round always keeps scoring well within this
+  // window. If it doesn't (an unforeseen bug traps the snake), force a
+  // theatrical loss and restart rather than freezing the stream — measured
+  // in wall-clock time so it fires consistently regardless of tick rate.
+  let lastScoreAt = performance.now();
   let roundElapsedMs = 0;
   let roundStartedAt = 0;
-  let recentStates: string[] = [];
   let autoStartHandle: ReturnType<typeof setTimeout> | null = null;
 
   function resetRound(config: GameConfig, level: number): void {
@@ -404,12 +288,9 @@ async function main(): Promise<void> {
     roundVariant = pickRoundVariant(currentConfig, roundVariant);
     speed = createSpeedMeter(currentConfig.commentSpeedStart);
     lastSpeedMilestone = 1;
-    shouldFailThisRound = Math.random() < currentConfig.humanErrorRate;
-    failureUsedThisRound = false;
-    ticksWithoutScore = 0;
+    lastScoreAt = performance.now();
     roundElapsedMs = 0;
     roundStartedAt = 0;
-    recentStates = [];
   }
 
   function scheduleAutoStart(prepare?: () => void): void {
@@ -472,7 +353,7 @@ async function main(): Promise<void> {
     lastTickTime = now;
 
     speed = decay(speed, dt);
-    const effectiveSpeed = speed.multiplier * currentConfig.baseSpeedMultiplier;
+    const effectiveSpeed = cappedEffectiveSpeed(speed.multiplier, currentConfig.baseSpeedMultiplier);
     const milestone = Math.floor(effectiveSpeed);
     if (milestone >= 2 && milestone > lastSpeedMilestone) {
       lastSpeedMilestone = milestone;
@@ -483,7 +364,7 @@ async function main(): Promise<void> {
       const scoreBefore = state.score;
       const directionBefore = state.direction;
 
-      if (ticksWithoutScore > currentConfig.boardWidth * currentConfig.boardHeight * 5) {
+      if (hasStalledTooLong(lastScoreAt, performance.now())) {
         state = { ...state, status: "lost" };
         audio.onLost();
         scheduleAutoStart(() => resetRound(baseConfig, 1));
@@ -491,38 +372,29 @@ async function main(): Promise<void> {
         return;
       }
 
-      const correctDirection = decideMove(state, effectiveSpeed, Math.random, roundVariant);
-      const nextFoodDistance = nearestFoodDistance(state, nextHeadForDirection(state, correctDirection));
-      const currentFoodDistance = nearestFoodDistance(state, state.snake[0]!);
-      const loopDetected =
-        ticksWithoutScore > Math.max(12, state.config.boardWidth + 2) &&
-        detectRepetitionLoop(recentStates) &&
-        nextFoodDistance >= currentFoodDistance;
-      const loopBreaker = loopDetected ? pickLoopBreakerDirection(state, correctDirection, recentStates) : null;
-      const humanMistake =
-        shouldFailThisRound && !failureUsedThisRound
-          ? pickDifficultHumanMistake(state, correctDirection)
-          : null;
-      const direction = humanMistake ?? loopBreaker ?? correctDirection;
-      if (humanMistake) failureUsedThisRound = true;
-
-      const next = tick(setDirection(state, direction));
-      if (next.score > scoreBefore) {
-        ticksWithoutScore = 0;
-        recentStates = [];
-        audio.onEat();
+      let stateForTick = state;
+      let direction: ReturnType<typeof decideMove>;
+      if (state.willMakeError && !state.humanErrorUsed && isErrorPhase(state)) {
+        const errDir = pickDeliberateMistake(state, Math.random);
+        if (errDir) {
+          direction = errDir;
+          stateForTick = { ...state, humanErrorUsed: true };
+        } else {
+          direction = decideMove(state, Math.random, roundVariant);
+        }
       } else {
-        ticksWithoutScore += 1;
+        direction = decideMove(state, Math.random, roundVariant);
       }
-
-      recentStates.push(`${next.snake[0]!.x},${next.snake[0]!.y}|${next.direction}`);
-      if (recentStates.length > 32) recentStates = recentStates.slice(-32);
+      const next = tick(setDirection(stateForTick, direction));
+      if (next.score > scoreBefore) {
+        lastScoreAt = performance.now();
+        audio.onEat();
+      }
 
       if (next.status === "victory") {
         victoryCount += 1;
         roundElapsedMs = roundStartedAt > 0 ? performance.now() - roundStartedAt : roundElapsedMs;
         roundStartedAt = 0;
-        recentStates = [];
         audio.onVictory();
         scheduleAutoStart(() => {
           if (baseConfig.growthEnabled) {
@@ -536,7 +408,6 @@ async function main(): Promise<void> {
       } else if (next.status === "lost") {
         roundElapsedMs = roundStartedAt > 0 ? performance.now() - roundStartedAt : roundElapsedMs;
         roundStartedAt = 0;
-        recentStates = [];
         audio.onLost();
         scheduleAutoStart(() => resetRound(baseConfig, 1));
       } else {
@@ -556,7 +427,7 @@ async function main(): Promise<void> {
   });
 
   app.ticker.add(() => {
-    const effectiveSpeed = speed.multiplier * currentConfig.baseSpeedMultiplier;
+    const effectiveSpeed = cappedEffectiveSpeed(speed.multiplier, currentConfig.baseSpeedMultiplier);
     const displayElapsedMs =
       state.status === "playing" && roundStartedAt > 0
         ? performance.now() - roundStartedAt
@@ -580,9 +451,16 @@ async function main(): Promise<void> {
       queuedFoods: state.foodQueue.length,
       direction: state.direction,
       score: state.score,
+      foodGoal: state.config.foodGoal,
     });
     board.update(state, effectiveSpeed);
-    screens.setStatus(state.status);
+    screens.setStatus(state.status, {
+      gameMode: state.config.gameMode,
+      score: state.score,
+      foodGoal: state.config.foodGoal,
+      coverage: state.snake.length / playableCells,
+      timer: formatTimer(displayElapsedMs),
+    });
   });
 
   if (import.meta.env.DEV) {

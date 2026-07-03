@@ -80,4 +80,22 @@ describe("TextureCache", () => {
     cache.acquire("https://cdn/slow.png");
     expect(loader).toHaveBeenCalledTimes(2);
   });
+
+  test("releasing all acquired URLs (as BoardRenderer.destroy() does) returns cache to initial empty state", async () => {
+    const loader = vi.fn().mockResolvedValue("texture");
+    const fallback = vi.fn().mockResolvedValue("fallback");
+    const cache = new TextureCache<string>(loader, fallback);
+
+    const avatarUrls = ["https://cdn/a.png", "https://cdn/b.png", "https://cdn/c.png"];
+    for (const url of avatarUrls) await cache.acquire(url);
+    expect(cache.entryCount).toBe(3);
+
+    // Simulate what BoardRenderer.destroy() does: release every cached avatar URL.
+    for (const url of avatarUrls) cache.release(url, () => {});
+    expect(cache.entryCount).toBe(0);
+
+    // A fresh acquire after destruction reloads from scratch, not from a leaked entry.
+    await cache.acquire(avatarUrls[0]!);
+    expect(loader).toHaveBeenCalledTimes(4); // 3 initial + 1 re-acquire
+  });
 });

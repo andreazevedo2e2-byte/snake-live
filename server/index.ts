@@ -1,31 +1,39 @@
 import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
+import { FakeChatSource } from "../src/chat/FakeChatSource";
 import { YouTubeChatSource } from "../src/chat/YouTubeChatSource";
 import type { ChatEvent, EventSource } from "../src/chat/types";
 
 const PORT = Number(process.env.PORT ?? 8787);
+const SNAKE_CHAT = (process.env.SNAKE_CHAT ?? "fake") as "fake" | "silent" | "youtube";
 const LIVE_URL = process.env.SNAKE_LIVE_URL;
 
 class SilentChatSource implements EventSource {
-  onChatEvent(_handler: (event: ChatEvent) => void): void {
-    // Keeps the WebSocket server alive without creating fake food/speed events.
-  }
+  onChatEvent(_handler: (event: ChatEvent) => void): void {}
 
   async start(): Promise<void> {
-    console.log("[server] no chat source configured; waiting for real YouTube integration");
+    console.log("[server] chat source: silent — no events will be emitted");
   }
 
-  stop(): void {
-    // No running source to stop.
-  }
+  stop(): void {}
 }
 
 function createEventSource(): EventSource {
-  if (LIVE_URL) {
-    console.log(`[server] reading real YouTube chat for: ${LIVE_URL}`);
+  if (SNAKE_CHAT === "youtube") {
+    if (!LIVE_URL) {
+      console.warn("[server] SNAKE_CHAT=youtube but SNAKE_LIVE_URL is not set; falling back to fake");
+      console.log("[server] chat source: fake (rehearsal mode)");
+      return new FakeChatSource();
+    }
+    console.log(`[server] chat source: youtube — reading live chat for ${LIVE_URL}`);
     return new YouTubeChatSource(LIVE_URL);
   }
-  return new SilentChatSource();
+  if (SNAKE_CHAT === "silent") {
+    return new SilentChatSource();
+  }
+  // "fake" (default) — rehearsal mode used during development and dry runs
+  console.log("[server] chat source: fake (rehearsal mode) — set SNAKE_CHAT=youtube to go live");
+  return new FakeChatSource();
 }
 
 const clients = new Set<WebSocket>();
