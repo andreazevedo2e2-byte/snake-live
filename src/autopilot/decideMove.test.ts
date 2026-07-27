@@ -550,11 +550,11 @@ describe("maze_race never ends on a chat avatar food, only the target", () => {
 });
 
 
-describe("AI is speed-independent (6x plays exactly like 1x) — v3.3", () => {
+describe("AI is speed-independent (12x plays exactly like 1x) — v3.3", () => {
   // decideMove takes no speed argument: its output is a pure function of the
   // game state (+ rng). Real-time speed only changes the wall-clock tick
   // interval in main.ts, never the decision. This test pins that: the same
-  // state produces the same move every call, so the autopilot at 6x is
+  // state produces the same move every call, so the autopilot at 12x is
   // byte-identical to 1x — the only thing that changes is how fast the ticks
   // are scheduled, which the effective-speed cap (≤6x) already bounds.
   test("same state yields the same decision on repeated calls", () => {

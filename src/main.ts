@@ -516,6 +516,11 @@ async function main(): Promise<void> {
         const pos = { x: h.x + dv.x, y: h.y + dv.y };
         state = { ...state, foods: [...state.foods.filter((f) => f.pos.x !== pos.x || f.pos.y !== pos.y), { id: `golden-dev-${Date.now()}`, pos, type: "apple_gold", kind: "golden" }] };
       },
+      // Dev-only: force the chat speed meter to a given multiplier to
+      // validate high-speed rendering/stability.
+      setChatSpeed: (multiplier: number) => {
+        speed = createSpeedMeter(multiplier);
+      },
     };
   }
 }

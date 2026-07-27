@@ -349,12 +349,13 @@ export class HudRenderer {
 
     const speedBarPosition = (value: number): number =>
       LAYOUT.speedBar.x + ((value - MIN_MULTIPLIER) / (MAX_MULTIPLIER - MIN_MULTIPLIER)) * LAYOUT.speedBar.width;
+    // v3.4: bar now runs 1..12 — tiers rescaled to mark the new range.
     const tiers = [
       { value: 1, text: "x1", color: COLORS.hudMuted },
-      { value: 2, text: "x2", color: 0x42ddff },
-      { value: 3, text: "x3", color: COLORS.speedBarFill },
-      { value: 4, text: "x4", color: COLORS.heroGold },
-      { value: 6, text: "x6", color: COLORS.speedBarHot },
+      { value: 3, text: "x3", color: 0x42ddff },
+      { value: 6, text: "x6", color: COLORS.speedBarFill },
+      { value: 9, text: "x9", color: COLORS.heroGold },
+      { value: 12, text: "x12", color: COLORS.speedBarHot },
     ];
     this.liveTierTexts = tiers.map((tier) => {
       const t = label(tier.text, 28, tier.color);

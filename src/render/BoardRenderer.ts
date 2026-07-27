@@ -339,8 +339,12 @@ export class BoardRenderer {
     this.currentSnake = state.snake.map((segment) => ({ ...segment }));
     this.snakeAnimationStart = performance.now();
     // Keep the animation duration below the gameplay tick at high speeds so
-    // 5x/6x does not visually "queue" two turns into one blurred motion.
-    this.snakeAnimationMs = Math.max(48, 300 / speedMultiplier);
+    // fast play doesn't visually "queue" two turns into one blurred motion.
+    // v3.4: floor lowered 48 → 30 ms to stay under the tick interval at 12x
+    // (420/12 = 35 ms). At 12x this uses 30 ms (300/12 = 25, floored to 30);
+    // slower speeds keep using 300/speed, which is always larger, so nothing
+    // changes below ~10x.
+    this.snakeAnimationMs = Math.max(30, 300 / speedMultiplier);
   }
 
   /** v3.2 arena (see COLORS.boardBackground note): neutral dark two-tone

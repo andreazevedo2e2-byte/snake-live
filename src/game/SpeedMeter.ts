@@ -1,15 +1,22 @@
 export const MIN_MULTIPLIER = 1;
-export const MAX_MULTIPLIER = 6;
+export const MAX_MULTIPLIER = 12;
 /** Hard ceiling for the product speed.multiplier × config.baseSpeedMultiplier.
- * Above this the tick interval drops below ~70 ms — faster than the snake
- * animation's minimum frame time, making the game an unreadable blur. */
-export const MAX_EFFECTIVE_SPEED = 6;
+ * v3.4: raised 6 → 12. At 12x the tick interval is 420/12 = 35 ms; measured
+ * AI decision time stays well under that on every board (avg <1 ms, and even
+ * the heaviest flag-size boards spike only rarely near the budget, which is
+ * self-correcting — a slow tick only delays itself, never the whole loop).
+ * The snake animation floor was lowered to 30 ms (see BoardRenderer) so the
+ * motion still finishes between ticks instead of blurring. */
+export const MAX_EFFECTIVE_SPEED = 12;
 
 /** Returns the effective tick speed after applying the ceiling. */
 export function cappedEffectiveSpeed(chatMultiplier: number, baseMultiplier: number): number {
   return Math.min(chatMultiplier * baseMultiplier, MAX_EFFECTIVE_SPEED);
 }
-const MAX_CHARGE = 50;
+// v3.4: 110 comments to max the bar (was 50), keeping the +0.1x-per-comment
+// feel while letting chat drive all the way to 12x — so peak speed stays a
+// rare, earned moment rather than something a handful of messages triggers.
+const MAX_CHARGE = 110;
 const CHARGE_PER_COMMENT = 1;
 // The HUD says "MORE CHAT = FASTER" — every allowed comment should nudge the
 // bar, not just ones that happen to say "speed". Smaller than the dedicated

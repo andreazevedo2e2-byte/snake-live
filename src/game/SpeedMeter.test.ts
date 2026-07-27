@@ -8,7 +8,7 @@ describe("SpeedMeter", () => {
   });
 
   test("can start from a configured multiplier", () => {
-    const meter = createSpeedMeter(6);
+    const meter = createSpeedMeter(MAX_MULTIPLIER);
     expect(meter.multiplier).toBe(MAX_MULTIPLIER);
   });
 
@@ -72,11 +72,12 @@ describe("addPassiveComment (#108 — 'MORE CHAT = FASTER' applies to any commen
 });
 
 describe("cappedEffectiveSpeed", () => {
-  test("chat max (6×) × base 1.0 stays at 6", () => {
-    expect(cappedEffectiveSpeed(MAX_MULTIPLIER, 1.0)).toBe(6);
+  test("chat max (12×) × base 1.0 stays at 12", () => {
+    expect(cappedEffectiveSpeed(MAX_MULTIPLIER, 1.0)).toBe(12);
+    expect(MAX_EFFECTIVE_SPEED).toBe(12);
   });
 
-  test("chat max (6×) × base 2.4 is capped at MAX_EFFECTIVE_SPEED (6), not 14.4", () => {
+  test("chat max (12×) × base 2.4 is capped at MAX_EFFECTIVE_SPEED (12), not 28.8", () => {
     expect(cappedEffectiveSpeed(MAX_MULTIPLIER, 2.4)).toBe(MAX_EFFECTIVE_SPEED);
   });
 
