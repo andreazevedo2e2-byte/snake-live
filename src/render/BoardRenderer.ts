@@ -69,8 +69,10 @@ export class BoardRenderer {
   private snakeGlowLayer = new Container();
   private connectorLayer = new Graphics();
   private snakeLayer = new Container();
+  private enchantLayer = new Graphics();
   private particleLayer = new Graphics();
   private faceLayer = new Graphics();
+  private enchanted = false;
   private particles: EatParticle[] = [];
   private prevScore = 0;
   // v3.1 juice state — all timestamp-driven, so every effect costs nothing
@@ -141,6 +143,7 @@ export class BoardRenderer {
       this.snakeGlowLayer,
       this.connectorLayer,
       this.snakeLayer,
+      this.enchantLayer,
       this.particleLayer,
       this.confettiLayer,
       this.floatText,
@@ -150,11 +153,18 @@ export class BoardRenderer {
     this.drawGrid();
   }
 
+  /** v3.3: called from the ticker each frame — true while the golden-apple
+   * enchant window is active (drives the snake shimmer aura). */
+  setEnchanted(value: boolean): void {
+    this.enchanted = value;
+  }
+
   update(state: GameState, speedMultiplier = 1): void {
     this.drawWalls(state);
     this.renderFoods(state);
     this.updateSnakeAnimation(state, speedMultiplier);
     this.renderSnake(state);
+    this.drawEnchantAura();
     this.maybeSpawnEatParticles(state);
     this.updateParticles();
     this.updateJuice(state);
@@ -257,6 +267,10 @@ export class BoardRenderer {
     for (const food of foods) {
       const x = food.pos.x * this.cellSize + this.cellSize / 2;
       const y = food.pos.y * this.cellSize + this.cellSize / 2;
+      if (food.kind === "golden") {
+        this.drawGoldenGlow(x, y, t, food.pos);
+        continue;
+      }
       const color = food.kind === "avatar" ? COLORS.avatarRing : COLORS.baseApple;
       // Outer ring breathes slowly; inner ring is constant
       const breathe = 0.5 + 0.5 * Math.sin(t / 780 + food.pos.x * 0.8 + food.pos.y * 1.2);
@@ -270,6 +284,36 @@ export class BoardRenderer {
         .ellipse(x, y + this.cellSize * 0.30, this.cellSize * 0.26, this.cellSize * 0.06)
         .fill({ color: 0x000000, alpha: 0.16 });
     }
+  }
+
+  /** v3.3 golden apple: a Minecraft-enchanted-apple look — a strong warm gold
+   * halo that pulses faster than a normal apple, plus a rotating magenta
+   * "enchant" glint and a few orbiting sparkles. Draws on the glow layer so
+   * it sits under the apple sprite. */
+  private drawGoldenGlow(x: number, y: number, t: number, pos: Vec2): void {
+    const pulse = 0.5 + 0.5 * Math.sin(t / 260 + pos.x + pos.y);
+    // Warm gold halo (two rings).
+    this.foodGlowLayer
+      .circle(x, y, this.cellSize * (0.62 + 0.14 * pulse))
+      .fill({ color: 0xffd23c, alpha: 0.12 + 0.08 * pulse })
+      .circle(x, y, this.cellSize * 0.4)
+      .fill({ color: 0xffe98a, alpha: 0.18 });
+    // Enchant glint: magenta, the Minecraft-shimmer signature.
+    this.foodGlowLayer
+      .circle(x, y, this.cellSize * (0.3 + 0.1 * pulse))
+      .fill({ color: 0xd657ff, alpha: 0.1 + 0.08 * (1 - pulse) });
+    // Orbiting sparkles.
+    for (let i = 0; i < 3; i++) {
+      const a = t / 340 + (i * Math.PI * 2) / 3;
+      const r = this.cellSize * 0.5;
+      this.foodGlowLayer
+        .circle(x + Math.cos(a) * r, y + Math.sin(a) * r, Math.max(1, this.cellSize * 0.06))
+        .fill({ color: 0xffffff, alpha: 0.5 + 0.4 * Math.sin(t / 120 + i) });
+    }
+    // Ground shadow.
+    this.foodGlowLayer
+      .ellipse(x, y + this.cellSize * 0.3, this.cellSize * 0.26, this.cellSize * 0.06)
+      .fill({ color: 0x000000, alpha: 0.16 });
   }
 
   private tongueExtension(): number {
@@ -625,6 +669,35 @@ export class BoardRenderer {
       const cy = point.y * this.cellSize + this.cellSize / 2 + offset;
       this.snakeShadowLayer.ellipse(cx, cy, radiusX, radiusY).fill({ color: 0x000000, alpha: 0.22 });
     }
+  }
+
+  /** v3.3: the golden-apple enchant aura — a pulsing gold/magenta halo that
+   * traces the snake while the enchant window is active. Cleared instantly
+   * when it ends, so it costs nothing outside the ~5s window. */
+  private drawEnchantAura(): void {
+    this.enchantLayer.clear();
+    if (!this.enchanted) return;
+    const points = this.interpolateSnake();
+    if (points.length === 0) return;
+    const t = performance.now();
+    const pulse = 0.5 + 0.5 * Math.sin(t / 180);
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i]!;
+      const cx = p.x * this.cellSize + this.cellSize / 2;
+      const cy = p.y * this.cellSize + this.cellSize / 2;
+      // Gold outer, magenta glint alternating along the body for the shimmer.
+      const gold = 0xffd23c;
+      const magenta = 0xd657ff;
+      const color = (i + Math.floor(t / 90)) % 2 === 0 ? gold : magenta;
+      this.enchantLayer
+        .circle(cx, cy, this.cellSize * (0.42 + 0.12 * pulse))
+        .fill({ color, alpha: 0.14 + 0.1 * pulse });
+    }
+    // A brighter halo around the head.
+    const head = points[0]!;
+    this.enchantLayer
+      .circle(head.x * this.cellSize + this.cellSize / 2, head.y * this.cellSize + this.cellSize / 2, this.cellSize * (0.55 + 0.15 * pulse))
+      .fill({ color: 0xfff2a8, alpha: 0.16 + 0.12 * pulse });
   }
 
   private drawSnakeTube(points: Vec2[], colorForSegment: (index: number) => number): void {

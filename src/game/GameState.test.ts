@@ -806,3 +806,74 @@ describe("maze spawn forces exploration (#114)", () => {
     }
   });
 });
+
+describe("golden (enchanted) apple (v3.3)", () => {
+  function seededRng(seed: number): () => number {
+    let calls = 0;
+    return () => ((seed * 9301 + calls++ * 49297) % 233280) / 233280;
+  }
+
+  test("eating a golden apple scatters 5-6 apples and bumps goldenPulse", () => {
+    const cfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 14, boardHeight: 12, gameMode: "classic", maxAvatarFoods: 0 };
+    let state: GameState = { ...createGame(cfg, seededRng(1)), status: "playing", score: 5, direction: "right" };
+    const head = state.snake[0]!;
+    state = {
+      ...state,
+      snake: [{ x: 5, y: 5 }, { x: 4, y: 5 }],
+      foods: [{ id: "golden-x", pos: { x: 6, y: 5 }, type: "apple_gold", kind: "golden" }],
+    };
+    void head;
+    const next = tick(state, seededRng(7));
+    expect(next.goldenPulse).toBe(state.goldenPulse + 1);
+    // The eaten golden is gone; a burst of 5-6 basics is now on the board.
+    expect(next.foods.some((f) => f.id === "golden-x")).toBe(false);
+    const basics = next.foods.filter((f) => f.kind === "basic");
+    expect(basics.length).toBeGreaterThanOrEqual(5);
+    expect(basics.length).toBeLessThanOrEqual(6);
+  });
+
+  test("a fresh classic game starts with goldenPulse 0 and no golden apple on the board", () => {
+    const state = createGame({ ...DEFAULT_CONFIG, gameMode: "classic" }, seededRng(3));
+    expect(state.goldenPulse).toBe(0);
+    expect(state.foods.some((f) => f.kind === "golden")).toBe(false);
+  });
+
+  test("a golden apple spawns on a lucky roll in classic mode", () => {
+    const cfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 12, boardHeight: 10, gameMode: "classic", maxAvatarFoods: 0 };
+    let state: GameState = { ...createGame(cfg, rngSeq([0.5])), status: "playing", score: 5, direction: "right" };
+    // Snake moves right into an empty cell (no eat this tick), with a basic
+    // food already present elsewhere so ensureBasicFood consumes no rng before
+    // the golden roll. First rng value < GOLDEN_APPLE_SPAWN_CHANCE fires it.
+    state = {
+      ...state,
+      snake: [{ x: 2, y: 2 }, { x: 1, y: 2 }],
+      foods: [basicFood({ x: 9, y: 8 })],
+    };
+    const next = tick(state, rngSeq([0.005, 0.5, 0.5, 0.5, 0.5, 0.5]));
+    expect(next.foods.some((f) => f.kind === "golden")).toBe(true);
+  });
+
+  test("no second golden apple spawns while one is already on the board", () => {
+    const cfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 12, boardHeight: 10, gameMode: "classic", maxAvatarFoods: 0 };
+    let state: GameState = { ...createGame(cfg, rngSeq([0.5])), status: "playing", score: 5, direction: "right" };
+    state = {
+      ...state,
+      snake: [{ x: 2, y: 2 }, { x: 1, y: 2 }],
+      foods: [basicFood({ x: 9, y: 8 }), { id: "golden-a", pos: { x: 5, y: 5 }, type: "apple_gold", kind: "golden" }],
+    };
+    const next = tick(state, rngSeq([0.005, 0.5, 0.5, 0.5]));
+    expect(next.foods.filter((f) => f.kind === "golden").length).toBe(1);
+  });
+
+  test("a golden apple never appears in a maze game (classic-only event)", () => {
+    const cfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 18, boardHeight: 14, gameMode: "maze_harvest" };
+    let state: GameState = { ...createGame(cfg, seededRng(2)), status: "playing", score: 5 };
+    let sawGolden = false;
+    for (let t = 0; t < 800; t++) {
+      state = tick(state, seededRng(t + 100));
+      if (state.status !== "playing") break;
+      if (state.foods.some((f) => f.kind === "golden")) { sawGolden = true; break; }
+    }
+    expect(sawGolden).toBe(false);
+  });
+});

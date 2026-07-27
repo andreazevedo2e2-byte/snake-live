@@ -74,6 +74,19 @@ export class Sfx {
     setTimeout(() => this.tone(1280, 130, "sine", 0.1), 150);
   }
 
+  /** v3.3 golden apple: a bright, magical ascending sparkle — a rising
+   * arpeggio in sine/triangle plus a shimmer tail, distinct from the eat
+   * chomp so viewers instantly recognize the enchant. Fully synthesized. */
+  golden(): void {
+    const notes = [659, 784, 988, 1319, 1568]; // E5 G5 B5 E6 G6
+    notes.forEach((freq, i) => {
+      setTimeout(() => this.tone(freq, 150, "triangle", 0.13), i * 55);
+    });
+    // Shimmer tail: a couple of high sines fading out.
+    setTimeout(() => this.tone(2093, 220, "sine", 0.07), notes.length * 55);
+    setTimeout(() => this.tone(2637, 260, "sine", 0.05), notes.length * 55 + 90);
+  }
+
   victory(): void {
     this.play("victory", () => {
       [523, 659, 784, 1046].forEach((freq, i) => {

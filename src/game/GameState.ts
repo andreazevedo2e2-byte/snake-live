@@ -532,6 +532,7 @@ export function createGame(config: Partial<GameConfig>, rng: Rng = Math.random):
     foodBlockedTicks: {},
     willMakeError: rng() < resolvedConfig.humanErrorRate,
     humanErrorUsed: false,
+    goldenPulse: 0,
   };
 }
 
@@ -639,6 +640,51 @@ function promoteQueuedFood(state: GameState, foods: BoardFood[], queue: BoardFoo
   };
 }
 
+// v3.3 golden (enchanted) apple. Rare, classic-mode-only event: a golden
+// apple appears at random; eating it scatters a burst of extra apples and
+// (handled in main.ts, wall-clock) enchants the snake for a few seconds with
+// a shimmer + speed boost. Kept to classic mode so it never collides with
+// full_food (already full) or the maze target-fruit logic.
+const GOLDEN_APPLE_SPAWN_CHANCE = 0.014; // per eligible tick, ~once every ~30s
+const GOLDEN_BURST_MIN = 5;
+const GOLDEN_BURST_MAX = 6;
+
+function goldenEligible(config: GameConfig): boolean {
+  return config.gameMode === "classic";
+}
+
+function createGoldenFood(id: string, pos: Vec2): BoardFood {
+  return { id, pos, type: "apple_gold", kind: "golden" };
+}
+
+/** Occasionally drop a single golden apple onto a safe cell. No-op unless the
+ * mode is eligible, no golden apple is already on the board, the round is
+ * past its first couple of points, and the random roll hits. */
+function maybeSpawnGoldenApple(state: GameState, snake: Vec2[], foods: BoardFood[], walls: Set<string>, score: number, rng: Rng): BoardFood[] {
+  if (!goldenEligible(state.config)) return foods;
+  if (score < 2) return foods;
+  if (foods.some((food) => food.kind === "golden")) return foods;
+  if (rng() >= GOLDEN_APPLE_SPAWN_CHANCE) return foods;
+  const pos = pickSafeSpawn(state.config, snake, foods, walls, rng);
+  return [...foods, createGoldenFood(`golden-${score}-${snake.length}`, pos)];
+}
+
+/** Scatter a burst of ordinary apples across safe cells — fired when a golden
+ * apple is eaten. Places 5–6 of them (bounded by available room). */
+function scatterBurstApples(state: GameState, snake: Vec2[], foods: BoardFood[], walls: Set<string>, score: number, rng: Rng): BoardFood[] {
+  const count = GOLDEN_BURST_MIN + Math.floor(rng() * (GOLDEN_BURST_MAX - GOLDEN_BURST_MIN + 1));
+  let next = foods;
+  for (let i = 0; i < count; i++) {
+    const pos = pickSafeSpawn(state.config, snake, next, walls, rng);
+    // pickSafeSpawn falls back to any free cell; guard against dropping two on
+    // the same square when the board is nearly full.
+    if (next.some((food) => food.pos.x === pos.x && food.pos.y === pos.y)) continue;
+    if (snake.some((seg) => seg.x === pos.x && seg.y === pos.y)) continue;
+    next = [...next, createBasicFood(`burst-${score}-${i}`, pos, randomFoodType(state.config, rng))];
+  }
+  return next;
+}
+
 export function tick(state: GameState, rng: Rng = Math.random): GameState {
   if (state.status !== "playing") return state;
 
@@ -681,6 +727,7 @@ export function tick(state: GameState, rng: Rng = Math.random): GameState {
   let score = state.score;
   let breadsEaten = state.breadsEaten;
   let walls = state.walls;
+  let goldenPulse = state.goldenPulse;
 
   if (eatenFood) {
     score += 1;
@@ -690,6 +737,12 @@ export function tick(state: GameState, rng: Rng = Math.random): GameState {
       const promoted = promoteQueuedFood({ ...state, snake: newSnake }, foods, foodQueue, rng);
       foods = promoted.foods;
       foodQueue = promoted.queue;
+    }
+    if (eatenFood.kind === "golden") {
+      // The enchant burst: scatter extra apples now; the wall-clock glow +
+      // speed boost is started in main.ts by watching goldenPulse jump.
+      foods = scatterBurstApples(state, newSnake, foods, walls, score, rng);
+      goldenPulse += 1;
     }
     walls = maybeAddPuddingWall(state, newSnake, foods, rng);
   }
@@ -712,18 +765,20 @@ export function tick(state: GameState, rng: Rng = Math.random): GameState {
       breadsEaten,
       revealedCells,
       walls,
+      goldenPulse,
       status: "victory",
     };
   }
 
   const ensuredFoods = ensureBasicFood({ ...state, snake: newSnake, foods, walls }, rng);
+  const withGolden = maybeSpawnGoldenApple(state, newSnake, ensuredFoods, walls, score, rng);
   // relocateStuckFoods exists only to recover from a pudding wall sealing off food
   // permanently. On wall-less boards (and on maze boards where walls are static and
   // food is always placed reachably), temporary body-blocking resolves on its own —
   // running this there would spuriously teleport the apple mid-game.
   const healed = state.config.gameMode === "pudding"
-    ? relocateStuckFoods(state.config, newSnake, ensuredFoods, walls, state.foodBlockedTicks, rng)
-    : { foods: ensuredFoods, foodBlockedTicks: state.foodBlockedTicks };
+    ? relocateStuckFoods(state.config, newSnake, withGolden, walls, state.foodBlockedTicks, rng)
+    : { foods: withGolden, foodBlockedTicks: state.foodBlockedTicks };
 
   return {
     ...state,
@@ -737,6 +792,7 @@ export function tick(state: GameState, rng: Rng = Math.random): GameState {
     revealedCells,
     walls,
     foodBlockedTicks: healed.foodBlockedTicks,
+    goldenPulse,
   };
 }
 

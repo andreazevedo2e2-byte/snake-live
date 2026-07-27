@@ -13,7 +13,7 @@ import {
 import { decideMove } from "./autopilot/decideMove";
 import { isErrorPhase, pickDeliberateMistake } from "./autopilot/humanError";
 import { availableVariants, type CycleVariant } from "./autopilot/hamiltonian";
-import { addComment, addPassiveComment, cappedEffectiveSpeed, createSpeedMeter, decay } from "./game/SpeedMeter";
+import { addComment, addPassiveComment, cappedEffectiveSpeed, createSpeedMeter, decay, MAX_EFFECTIVE_SPEED } from "./game/SpeedMeter";
 import { createLeaderboard, creditViewer, topViewers } from "./game/Leaderboard";
 import { hasStalledTooLong, watchdogThresholdMs } from "./game/watchdog";
 import { normalizeOddDimensions } from "./game/boardSize";
@@ -34,7 +34,7 @@ const CHAT_WS_URL = (import.meta.env.VITE_CHAT_WS_URL as string | undefined) ?? 
 const MAX_START_WIDTH = 36;
 const MAX_START_HEIGHT = 24;
 const MAP_PRESET_SIZE: Record<MapThemeId, { width: number; height: number }> = {
-  classic: { width: 10, height: 8 },
+  classic: { width: 8, height: 7 },
   heart: { width: 18, height: 16 },
   brazil: { width: 32, height: 20 },
   france: { width: 24, height: 16 },
@@ -284,6 +284,15 @@ async function main(): Promise<void> {
   let roundElapsedMs = 0;
   let roundStartedAt = 0;
   let autoStartHandle: ReturnType<typeof setTimeout> | null = null;
+  // v3.3 golden apple enchant: wall-clock window during which the snake is
+  // "enchanted" (shimmer + speed boost). Started when goldenPulse jumps.
+  let prevGoldenPulse = 0;
+  let enchantUntil = 0;
+  const ENCHANT_MS = 5000;
+  const ENCHANT_SPEED_FACTOR = 1.8;
+  const enchantActive = (now: number): boolean => now < enchantUntil;
+  const applyEnchant = (baseSpeed: number, now: number): number =>
+    enchantActive(now) ? Math.min(MAX_EFFECTIVE_SPEED, baseSpeed * ENCHANT_SPEED_FACTOR) : baseSpeed;
 
   function resetRound(config: GameConfig, level: number): void {
     const pendingAvatars = carryOverAvatarFoods(state);
@@ -367,6 +376,9 @@ async function main(): Promise<void> {
 
     speed = decay(speed, dt);
     const effectiveSpeed = cappedEffectiveSpeed(speed.multiplier, currentConfig.baseSpeedMultiplier);
+    // The enchant window temporarily overdrives the tick rate; milestone SFX
+    // stays on the base speed so the boost doesn't spam it.
+    const loopSpeed = applyEnchant(effectiveSpeed, now);
     const milestone = Math.floor(effectiveSpeed);
     if (milestone >= 2 && milestone > lastSpeedMilestone) {
       lastSpeedMilestone = milestone;
@@ -381,7 +393,7 @@ async function main(): Promise<void> {
         state = { ...state, status: "lost" };
         audio.onLost();
         scheduleAutoStart(() => resetRound(baseConfig, 1));
-        gameLoopHandle = setTimeout(runGameLoop, BASE_TICK_MS / effectiveSpeed);
+        gameLoopHandle = setTimeout(runGameLoop, BASE_TICK_MS / loopSpeed);
         return;
       }
 
@@ -402,6 +414,13 @@ async function main(): Promise<void> {
       if (next.score > scoreBefore) {
         lastScoreAt = performance.now();
         audio.onEat();
+      }
+      // Golden apple just eaten → start the enchant window (speed + shimmer)
+      // and play its jingle. The renderer reads enchant state in the ticker.
+      if (next.goldenPulse > prevGoldenPulse) {
+        prevGoldenPulse = next.goldenPulse;
+        enchantUntil = performance.now() + ENCHANT_MS;
+        audio.onGolden();
       }
 
       if (next.status === "victory") {
@@ -431,7 +450,7 @@ async function main(): Promise<void> {
       state = { ...next, level: currentLevel };
     }
 
-    gameLoopHandle = setTimeout(runGameLoop, BASE_TICK_MS / effectiveSpeed);
+    gameLoopHandle = setTimeout(runGameLoop, BASE_TICK_MS / loopSpeed);
   }
 
   runGameLoop();
@@ -466,6 +485,7 @@ async function main(): Promise<void> {
       score: state.score,
       foodGoal: state.config.foodGoal,
     });
+    board.setEnchanted(enchantActive(performance.now()));
     board.update(state, effectiveSpeed);
     screens.setStatus(state.status, {
       gameMode: state.config.gameMode,
@@ -487,6 +507,14 @@ async function main(): Promise<void> {
         // Same flow as the settings panel: without this the new round sits
         // on the start screen forever.
         scheduleAutoStart();
+      },
+      // Dev-only: drop a golden apple right in front of the head to exercise
+      // the enchant path during manual validation.
+      forceGolden: () => {
+        const h = state.snake[0]!;
+        const dv = { up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 } }[state.direction];
+        const pos = { x: h.x + dv.x, y: h.y + dv.y };
+        state = { ...state, foods: [...state.foods.filter((f) => f.pos.x !== pos.x || f.pos.y !== pos.y), { id: `golden-dev-${Date.now()}`, pos, type: "apple_gold", kind: "golden" }] };
       },
     };
   }

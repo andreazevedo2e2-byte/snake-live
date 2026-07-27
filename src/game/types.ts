@@ -13,7 +13,11 @@ export interface AvatarFood {
 }
 
 export type FoodType = "apple_red" | "apple_gold" | "bread" | "watermelon";
-export type FoodKind = "basic" | "avatar";
+/** "golden" = the rare enchanted golden apple (v3.3): eating it scatters a
+ * burst of extra apples across the board and enchants the snake for a few
+ * seconds (speed boost + shimmer). Distinct kind so the renderer/audio and
+ * the eat handler can treat it specially. */
+export type FoodKind = "basic" | "avatar" | "golden";
 export type MapThemeId = "classic" | "heart" | "brazil" | "france" | "norway" | "creeper";
 export type GameMode = "classic" | "full_food" | "maze_race" | "maze_harvest" | "pudding";
 export type ColorMode = "gradient" | "map";
@@ -59,8 +63,11 @@ export interface GameConfig {
 }
 
 export const DEFAULT_CONFIG: GameConfig = {
-  boardWidth: 10,
-  boardHeight: 8,
+  // v3.3: default classic board trimmed from 10x8 to 8x7 so the snake/apples
+  // render bigger and read more clearly on stream (André's "deixar o mapa
+  // padrão um pouco menor"). 8 is even, so the Hamiltonian cycle still holds.
+  boardWidth: 8,
+  boardHeight: 7,
   maxAvatarFoods: 3,
   mapTheme: "classic",
   gameMode: "classic",
@@ -127,6 +134,11 @@ export interface GameState {
   /** Set to true once the round's deliberate mistake has been executed, so
    * only exactly one error fires per round regardless of tick count. */
   humanErrorUsed: boolean;
+  /** Increments by 1 every tick a golden (enchanted) apple is eaten. The
+   * render/audio/speed layers watch this counter for a jump instead of
+   * trying to diff the food list, so the wall-clock enchant window (glow +
+   * speed boost) starts exactly once per golden apple. */
+  goldenPulse: number;
 }
 
 export type Rng = () => number;

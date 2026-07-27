@@ -43,6 +43,10 @@ export class AudioManager {
     this.sfx.speedMilestone();
   }
 
+  onGolden(): void {
+    this.sfx.golden();
+  }
+
   onVictory(): void {
     this.sfx.victory();
   }

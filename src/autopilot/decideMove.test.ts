@@ -549,3 +549,40 @@ describe("maze_race never ends on a chat avatar food, only the target", () => {
   );
 });
 
+
+describe("AI is speed-independent (6x plays exactly like 1x) — v3.3", () => {
+  // decideMove takes no speed argument: its output is a pure function of the
+  // game state (+ rng). Real-time speed only changes the wall-clock tick
+  // interval in main.ts, never the decision. This test pins that: the same
+  // state produces the same move every call, so the autopilot at 6x is
+  // byte-identical to 1x — the only thing that changes is how fast the ticks
+  // are scheduled, which the effective-speed cap (≤6x) already bounds.
+  test("same state yields the same decision on repeated calls", () => {
+    const cfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 12, boardHeight: 10, maxAvatarFoods: 0 };
+    let state: GameState = { ...createGame(cfg, () => 0.42), status: "playing" };
+    for (let t = 0; t < 40; t++) {
+      const a = decideMove(state, () => 0.42);
+      const b = decideMove(state, () => 0.42);
+      const c = decideMove(state, () => 0.42);
+      expect(a).toBe(b);
+      expect(b).toBe(c);
+      state = tick(setDirection(state, a), () => 0.42);
+      if (state.status !== "playing") break;
+    }
+  });
+
+  test("a full game reaches the same outcome regardless of how ticks would be paced", () => {
+    // Two identical runs (same seed) end identically — proving nothing about
+    // the run depends on wall-clock speed, only on the tick sequence.
+    function run(): string {
+      let s: GameState = { ...createGame({ ...DEFAULT_CONFIG, boardWidth: 10, boardHeight: 8, maxAvatarFoods: 0 }, () => 0.3), status: "playing" };
+      let ticks = 0;
+      for (; ticks < 10000; ticks++) {
+        s = tick(setDirection(s, decideMove(s, () => 0.3)), () => 0.3);
+        if (s.status !== "playing") break;
+      }
+      return `${s.status}:${s.score}:${ticks}`;
+    }
+    expect(run()).toBe(run());
+  });
+});
