@@ -6,18 +6,18 @@ const FAKE_AUTHORS = [
 ];
 
 const FAKE_MESSAGES = [
-  "food",
-  "add food",
-  "speed",
-  "food food",
-  "speed please",
-  "add",
-  "food",
-  "speed",
+  "comida",
+  "manda comida",
+  "velocidade",
+  "comida por favor",
+  "rapido",
+  "comida",
+  "acelera",
+  "velocidade",
 ];
 
 /** Pure, deterministic generator used both by FakeChatSource's timer loop and
- * by tests â€” same index always produces the same fake comment. */
+ * by tests — same index always produces the same fake comment. */
 export function nextFakeChatEvent(index: number): ChatEvent {
   const author = FAKE_AUTHORS[index % FAKE_AUTHORS.length];
   const text = FAKE_MESSAGES[index % FAKE_MESSAGES.length];

@@ -1,12 +1,11 @@
 import { Howl, Howler } from "howler";
 
-type SoundName = "turn" | "eat" | "boost" | "victory" | "lost";
+type SoundName = "turn" | "eat" | "victory" | "lost";
 const DEFAULT_MASTER_VOLUME = 0.6;
 
 const SOUND_URLS: Record<SoundName, string[]> = {
   turn: ["/assets/sfx/keyboard/keypress.wav"],
   eat: ["/assets/sfx/custom/minecraft-eat.mp3"],
-  boost: ["/assets/sfx/kenney/boost.wav"],
   victory: ["/assets/sfx/custom/victory-hok.mp3"],
   lost: ["/assets/sfx/snake/lost.ogg"],
 };
@@ -14,7 +13,6 @@ const SOUND_URLS: Record<SoundName, string[]> = {
 const VOLUMES: Record<SoundName, number> = {
   turn: 1,
   eat: 1,
-  boost: 1,
   victory: 1,
   lost: 1,
 };
@@ -74,22 +72,6 @@ export class Sfx {
     this.tone(640, 80, "square", 0.11);
     setTimeout(() => this.tone(920, 110, "triangle", 0.13), 70);
     setTimeout(() => this.tone(1280, 130, "sine", 0.1), 150);
-  }
-
-  boost(): void {
-    this.play("boost", () => {
-      const ctx = this.getContext();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sawtooth";
-      osc.frequency.setValueAtTime(220, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.4);
-      gain.gain.setValueAtTime(0.12, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.45);
-      osc.connect(gain).connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.45);
-    });
   }
 
   victory(): void {

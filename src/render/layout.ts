@@ -4,9 +4,15 @@ export const SCREEN_HEIGHT = 1920;
 export const COLORS = {
   background: 0x020403,
   backgroundGlow: 0x102d08,
-  boardBackground: 0x14001f,
-  boardBandA: 0x25003a,
-  boardBandB: 0x8a0050,
+  // v3.2 arena: a stable, neutral dark blue-graphite checkerboard. The old
+  // background followed the snake's hue (board turned pink when the snake
+  // did — everything blended into one monochrome mush) and layered banded
+  // stripes + low-alpha orbs that read as rendering artifacts on stream.
+  // A neutral two-tone checker gives instant cell legibility (the classic
+  // snake-game look) and makes the colorful snake/food/walls pop; only the
+  // neon frame follows the snake's accent now.
+  boardBackground: 0x0d1420,
+  boardTileAlt: 0x131c2c,
   boardWall: 0xa9ef12,
   boardWallShadow: 0x4b7208,
   gridLine: 0x7c1689,

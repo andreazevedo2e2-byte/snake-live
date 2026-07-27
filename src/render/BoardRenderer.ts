@@ -1,9 +1,20 @@
-import { Container, Graphics, Sprite, Texture } from "pixi.js";
+import { Container, Graphics, Sprite, Text, Texture } from "pixi.js";
 import type { BoardFood, Direction, FoodType, GameState, Vec2 } from "../game/types";
 import { hueForLength, lerpHue } from "../game/colorHue";
 import { LAYOUT, COLORS } from "./layout";
 import { TextureCache } from "./TextureCache";
 import { mapCellColor } from "./mapThemes";
+import { isParticleAlive, particleFrame, spawnEatBurst, type EatParticle } from "./particles";
+import {
+  confettiFrame,
+  floatingTextFrame,
+  headSquashScale,
+  shakeOffset,
+  spawnConfetti,
+  spawnPopScale,
+  SPAWN_POP_MS,
+  type ConfettiPiece,
+} from "./juice";
 
 const START_SNAKE_LENGTH = 2;
 const HUE_LERP_SPEED = 0.04;
@@ -54,10 +65,25 @@ export class BoardRenderer {
   private wallLayer = new Graphics();
   private gridLayer = new Graphics();
   private foodLayer = new Container();
+  private snakeShadowLayer = new Graphics();
   private snakeGlowLayer = new Container();
   private connectorLayer = new Graphics();
   private snakeLayer = new Container();
+  private particleLayer = new Graphics();
   private faceLayer = new Graphics();
+  private particles: EatParticle[] = [];
+  private prevScore = 0;
+  // v3.1 juice state — all timestamp-driven, so every effect costs nothing
+  // once its window has elapsed.
+  private baseViewX = 0;
+  private baseViewY = 0;
+  private lastEatAt = Number.NEGATIVE_INFINITY;
+  private floatText = new Text({ text: "+1", style: { fill: 0xffffff, fontFamily: '"Arial Black", Arial, sans-serif', fontSize: 30, fontWeight: "900", dropShadow: { color: 0x000000, alpha: 0.8, blur: 2, distance: 2 } } });
+  private floatTextOrigin = { x: 0, y: 0 };
+  private confetti: ConfettiPiece[] = [];
+  private confettiLayer = new Graphics();
+  private prevStatus: GameState["status"] = "start";
+  private foodSpawnAt = new Map<string, number>();
   private cellSize: number;
   private boardPixelWidth: number;
   private boardPixelHeight: number;
@@ -97,8 +123,13 @@ export class BoardRenderer {
     this.cellSize = LAYOUT.board.size / Math.max(boardWidth, boardHeight);
     this.boardPixelWidth = this.cellSize * boardWidth;
     this.boardPixelHeight = this.cellSize * boardHeight;
-    this.view.x = LAYOUT.board.x + (LAYOUT.board.size - this.boardPixelWidth) / 2;
-    this.view.y = LAYOUT.board.y + (LAYOUT.board.size - this.boardPixelHeight) / 2;
+    this.baseViewX = LAYOUT.board.x + (LAYOUT.board.size - this.boardPixelWidth) / 2;
+    this.baseViewY = LAYOUT.board.y + (LAYOUT.board.size - this.boardPixelHeight) / 2;
+    this.view.x = this.baseViewX;
+    this.view.y = this.baseViewY;
+    this.floatText.anchor.set(0.5);
+    this.floatText.alpha = 0;
+    this.floatText.style.fontSize = Math.round(this.cellSize * 0.5);
     this.view.addChild(
       this.backgroundLayer,
       this.mapLayer,
@@ -106,9 +137,13 @@ export class BoardRenderer {
       this.gridLayer,
       this.foodGlowLayer,
       this.foodLayer,
+      this.snakeShadowLayer,
       this.snakeGlowLayer,
       this.connectorLayer,
       this.snakeLayer,
+      this.particleLayer,
+      this.confettiLayer,
+      this.floatText,
       this.faceLayer
     );
     this.drawBackground();
@@ -120,6 +155,99 @@ export class BoardRenderer {
     this.renderFoods(state);
     this.updateSnakeAnimation(state, speedMultiplier);
     this.renderSnake(state);
+    this.maybeSpawnEatParticles(state);
+    this.updateParticles();
+    this.updateJuice(state);
+  }
+
+  /** v3.1 juice: per-frame driver for the watch-appeal effects. Everything
+   * keys off timestamps set on the eat/victory transitions, so idle frames
+   * reduce to a handful of "window elapsed?" checks. */
+  private updateJuice(state: GameState): void {
+    const now = performance.now();
+
+    // Eat screen-shake — a short decaying wobble of the whole board.
+    const shake = shakeOffset(now - this.lastEatAt, this.lastEatAt % 977);
+    this.view.x = this.baseViewX + shake.x;
+    this.view.y = this.baseViewY + shake.y;
+
+    // Floating "+1" above where the food was eaten.
+    const floatFrame = floatingTextFrame(now - this.lastEatAt);
+    if (floatFrame) {
+      this.floatText.alpha = floatFrame.alpha;
+      this.floatText.x = this.floatTextOrigin.x;
+      this.floatText.y = this.floatTextOrigin.y + floatFrame.dy;
+    } else {
+      this.floatText.alpha = 0;
+    }
+
+    // Victory confetti — spawned once on the playing→victory transition.
+    if (state.status === "victory" && this.prevStatus !== "victory") {
+      this.confetti = spawnConfetti(
+        this.boardPixelWidth / 2,
+        this.boardPixelHeight * 0.35,
+        this.boardPixelWidth * 0.5,
+        now,
+      );
+    }
+    this.prevStatus = state.status;
+
+    this.confettiLayer.clear();
+    if (this.confetti.length > 0) {
+      const gravity = this.boardPixelHeight * 0.55;
+      let anyAlive = false;
+      const size = Math.max(4, this.cellSize * 0.16);
+      for (const piece of this.confetti) {
+        const frame = confettiFrame(piece, now, gravity);
+        if (!frame) continue;
+        anyAlive = true;
+        // Fake the tumble by squeezing the width with the rotation phase.
+        const w = size * (0.35 + 0.65 * Math.abs(Math.cos(frame.rotation)));
+        this.confettiLayer.rect(frame.x - w / 2, frame.y - size / 2, w, size).fill({ color: piece.color, alpha: frame.alpha });
+      }
+      if (!anyAlive) this.confetti = [];
+    }
+  }
+
+  /** #115(b): a brief particle burst where the snake just ate gives the
+   * moment some punch beyond the food sprite simply vanishing. Detected by
+   * score increasing since the last update() call (not by diffing food
+   * lists) since food removal for other reasons — e.g. relocateStuckFoods —
+   * shouldn't trigger it. The math lives in the pure, unit-tested
+   * particles.ts module; this class only draws the resulting frames. */
+  private maybeSpawnEatParticles(state: GameState): void {
+    if (state.score > this.prevScore) {
+      const head = state.snake[0]!;
+      const cx = head.x * this.cellSize + this.cellSize / 2;
+      const cy = head.y * this.cellSize + this.cellSize / 2;
+      const color = state.config.colorMode === "map" ? COLORS.hud : COLORS.baseApple;
+      const now = performance.now();
+      this.particles.push(...spawnEatBurst(cx, cy, color, this.cellSize, now));
+      // Kick off the rest of the eat juice: shake, head squash and the
+      // floating "+1" all share this timestamp.
+      this.lastEatAt = now;
+      this.floatTextOrigin = { x: cx, y: cy - this.cellSize * 0.55 };
+    }
+    this.prevScore = state.score;
+  }
+
+  /** Pruned and redrawn every frame regardless of tick changes, so the burst
+   * animates smoothly rather than jumping between tick snapshots — same
+   * dirty-Graphics tradeoff as everything else here: cheap when empty
+   * (the common case), a `.clear()` + a handful of circles when active. */
+  private updateParticles(): void {
+    if (this.particles.length === 0) {
+      this.particleLayer.clear();
+      return;
+    }
+    const now = performance.now();
+    this.particles = this.particles.filter((p) => isParticleAlive(p, now));
+    this.particleLayer.clear();
+    for (const p of this.particles) {
+      const frame = particleFrame(p, now, this.cellSize);
+      if (!frame) continue;
+      this.particleLayer.circle(frame.x, frame.y, frame.radius).fill({ color: p.color, alpha: frame.alpha });
+    }
   }
 
   private drawFoodGlows(foods: BoardFood[]): void {
@@ -171,97 +299,57 @@ export class BoardRenderer {
     this.snakeAnimationMs = Math.max(48, 300 / speedMultiplier);
   }
 
-  private drawBackground(accentColor: number = COLORS.boardWall, accentHue = 205): void {
-    this.drawDynamicBackground(accentColor, accentHue);
-  }
-
-  private drawClassicBackground(accentColor: number, accentHue: number): void {
+  /** v3.2 arena (see COLORS.boardBackground note): neutral dark two-tone
+   * checkerboard — the classic snake-game floor — with a neon frame that is
+   * the ONLY element following the snake's accent color. The tiles never
+   * change hue, so the colorful snake, the glowing food and the light maze
+   * walls always sit on a stable, high-contrast stage. Redrawn only when
+   * the accent changes (same dirty-check as before), never per frame. */
+  private drawBackground(accentColor: number = COLORS.boardWall): void {
     const w = this.boardPixelWidth;
     const h = this.boardPixelHeight;
-    const haloColor = mixRgb(accentColor, 0x050909, 0.35);
-    const panelColor = mixRgb(accentColor, 0x081008, 0.48);
-    const orbColor = hueToRgb((accentHue + 18) % 360, 0.62, 0.48);
     this.backgroundLayer
       .clear()
-      .roundRect(-11, -11, w + 22, h + 22, 12)
-      .fill({ color: haloColor, alpha: 0.28 })
-      .roundRect(-5, -5, w + 10, h + 10, 9)
-      .fill(panelColor)
-      .roundRect(-5, -5, w + 10, h + 10, 9)
-      .stroke({ width: 4, color: accentColor, alpha: 0.96 })
+      // Soft outer glow, then the neon frame itself.
+      .roundRect(-13, -13, w + 26, h + 26, 14)
+      .fill({ color: accentColor, alpha: 0.16 })
+      .roundRect(-6, -6, w + 12, h + 12, 10)
+      .fill({ color: mixRgb(accentColor, 0x02060c, 0.72) })
+      .roundRect(-6, -6, w + 12, h + 12, 10)
+      .stroke({ width: 4, color: accentColor, alpha: 0.9 })
+      // Arena base.
       .rect(0, 0, w, h)
       .fill(COLORS.boardBackground);
 
-    const bandHeight = h / 4;
-    for (let i = 0; i < 4; i++) {
-      this.backgroundLayer
-        .rect(0, i * bandHeight, w, bandHeight)
-        .fill({ color: i % 2 === 0 ? COLORS.boardBandA : COLORS.boardBandB, alpha: 0.2 + i * 0.04 });
+    // Two-tone checkerboard: draw only the alternate tiles over the base.
+    for (let x = 0; x < this.boardWidth; x++) {
+      for (let y = 0; y < this.boardHeight; y++) {
+        if ((x + y) % 2 === 0) continue;
+        this.backgroundLayer
+          .rect(x * this.cellSize, y * this.cellSize, this.cellSize, this.cellSize)
+          .fill(COLORS.boardTileAlt);
+      }
     }
 
+    // Subtle inner vignette: darkens the arena edges so the eye settles on
+    // the center where the action is. Two thin inset strokes fake a gradient.
     this.backgroundLayer
-      .circle(w * 0.18, h * 0.7, Math.min(w, h) * 0.12)
-      .fill({ color: orbColor, alpha: 0.08 })
-      .circle(w * 0.82, h * 0.18, Math.min(w, h) * 0.1)
-      .fill({ color: orbColor, alpha: 0.08 })
-      .ellipse(w * 0.55, h * 0.92, w * 0.22, h * 0.07)
-      .fill({ color: accentColor, alpha: 0.06 });
-  }
-
-  private drawDynamicBackground(accentColor: number = COLORS.boardWall, accentHue = 205): void {
-    const w = this.boardPixelWidth;
-    const h = this.boardPixelHeight;
-    const boardBase = hueToRgb(accentHue, 0.68, 0.1);
-    const bandA = hueToRgb((accentHue + 8) % 360, 0.62, 0.15);
-    const bandB = hueToRgb((accentHue + 22) % 360, 0.7, 0.2);
-    this.backgroundLayer
-      .clear()
-      .roundRect(-11, -11, w + 22, h + 22, 12)
-      .fill({ color: accentColor, alpha: 0.28 })
-      .roundRect(-5, -5, w + 10, h + 10, 9)
-      .fill(accentColor)
-      .roundRect(-5, -5, w + 10, h + 10, 9)
-      .stroke({ width: 4, color: accentColor, alpha: 0.96 })
-      .rect(0, 0, w, h)
-      .fill(boardBase);
-
-    const bandHeight = h / 4;
-    for (let i = 0; i < 4; i++) {
-      this.backgroundLayer
-        .rect(0, i * bandHeight, w, bandHeight)
-        .fill({ color: i % 2 === 0 ? bandA : bandB, alpha: 0.25 + i * 0.055 });
-    }
-
-    this.backgroundLayer
-      .circle(w * 0.18, h * 0.7, Math.min(w, h) * 0.12)
-      .fill({ color: accentColor, alpha: 0.08 })
-      .circle(w * 0.82, h * 0.18, Math.min(w, h) * 0.1)
-      .fill({ color: accentColor, alpha: 0.08 })
-      .ellipse(w * 0.55, h * 0.92, w * 0.22, h * 0.07)
-      .fill({ color: accentColor, alpha: 0.06 });
+      .rect(1, 1, w - 2, h - 2)
+      .stroke({ width: this.cellSize * 0.5, color: 0x000000, alpha: 0.1 })
+      .rect(1, 1, w - 2, h - 2)
+      .stroke({ width: this.cellSize * 0.18, color: 0x000000, alpha: 0.12 });
   }
 
   private drawGrid(accentColor: number = COLORS.gridLine): void {
     const w = this.boardPixelWidth;
     const h = this.boardPixelHeight;
     this.gridLayer.clear();
-    // Subtle cell lines to show the grid structure
-    for (let x = 1; x < this.boardWidth; x++) {
-      this.gridLayer
-        .moveTo(x * this.cellSize, 0)
-        .lineTo(x * this.cellSize, h)
-        .stroke({ width: 1, color: accentColor, alpha: 0.08 });
-    }
-    for (let y = 1; y < this.boardHeight; y++) {
-      this.gridLayer
-        .moveTo(0, y * this.cellSize)
-        .lineTo(w, y * this.cellSize)
-        .stroke({ width: 1, color: accentColor, alpha: 0.08 });
-    }
-    // Board border
+    // The checkerboard already communicates the cell structure — interior
+    // grid lines would just add noise on top of it. Keep only a crisp
+    // arena boundary.
     this.gridLayer
       .rect(0, 0, w, h)
-      .stroke({ width: 3, color: accentColor, alpha: 0.26 });
+      .stroke({ width: 3, color: accentColor, alpha: 0.3 });
   }
 
   private getSegment(index: number): Graphics {
@@ -289,6 +377,7 @@ export class BoardRenderer {
     this.displayedHue = lerpHue(this.displayedHue, targetHue, state.config.gradientSpeed || HUE_LERP_SPEED);
     const baseHue = (205 + this.displayedHue) % 360;
     const visualSnake = this.interpolateSnake();
+    this.drawSnakeShadow(visualSnake, state.config.snakeStyle);
     const colorForSegment = (index: number): number => {
       if (state.config.colorMode === "map") {
         const segment = visualSnake[index] ?? visualSnake[visualSnake.length - 1] ?? state.snake[0]!;
@@ -311,10 +400,11 @@ export class BoardRenderer {
     if (accentColor !== this.prevAccentColor || baseHueRounded !== this.prevBaseHueRounded) {
       this.prevAccentColor = accentColor;
       this.prevBaseHueRounded = baseHueRounded;
-      if (state.config.mapTheme === "classic") this.drawClassicBackground(accentColor, baseHue);
-      else this.drawDynamicBackground(accentColor, baseHue);
+      this.drawBackground(accentColor);
+      // Boundary follows the same accent as the frame on every theme — the
+      // old purple gridLine clashes with the neutral navy arena.
       if (state.config.snakeStyle === "google") this.gridLayer.clear();
-      else this.drawGrid(state.config.mapTheme === "classic" ? COLORS.gridLine : accentColor);
+      else this.drawGrid(accentColor);
     }
     this.drawMapOverlay(state);
 
@@ -350,7 +440,9 @@ export class BoardRenderer {
       } else {
         seg.circle(0, 0, this.cellSize * 0.32).fill(color);
       }
-      seg.scale.set(1, 1);
+      // v3.1 juice: the head "gulps" (brief bulge) right after eating.
+      const squash = index === 0 ? headSquashScale(performance.now() - this.lastEatAt) : 1;
+      seg.scale.set(squash, squash);
       seg.rotation = 0;
     });
 
@@ -372,6 +464,7 @@ export class BoardRenderer {
     for (const [id, sprite] of this.basicFoodSprites) {
       if (!presentIds.has(id)) {
         this.basicFoodSprites.delete(id);
+        this.foodSpawnAt.delete(id);
         sprite.destroy();
       }
     }
@@ -423,11 +516,19 @@ export class BoardRenderer {
     if (!sprite) {
       sprite = new Sprite(this.foodTextures[food.type]);
       sprite.anchor.set(0.5);
-      sprite.width = this.cellSize * 0.84;
-      sprite.height = this.cellSize * 0.84;
       this.basicFoodSprites.set(food.id, sprite);
       this.foodLayer.addChild(sprite);
+      // v3.1 juice: new food pops in (scale overshoot) instead of blinking
+      // into existence. Also fires when a food is relocated under a new id.
+      this.foodSpawnAt.set(food.id, performance.now());
     }
+
+    const elapsed = performance.now() - (this.foodSpawnAt.get(food.id) ?? 0);
+    const scale = spawnPopScale(elapsed);
+    const size = this.cellSize * 0.84 * scale;
+    sprite.width = size;
+    sprite.height = size;
+    if (elapsed >= SPAWN_POP_MS) this.foodSpawnAt.delete(food.id);
 
     sprite.x = food.pos.x * this.cellSize + this.cellSize / 2;
     sprite.y = food.pos.y * this.cellSize + this.cellSize / 2;
@@ -480,15 +581,49 @@ export class BoardRenderer {
           ? 0xffffff
           : COLORS.panelLine;
 
+    // #115(a): a plain flat fill read as a painted-on rectangle rather than a
+    // physical block — a light bevel on the top/left edge and a dark one on
+    // bottom/right (like a raised button) gives each wall a sense of depth
+    // without any per-frame cost (this whole layer only redraws when the
+    // wall set actually changes, via the dirty-check above).
+    const highlight = mixRgb(wallFill, 0xffffff, 0.4);
+    const shadow = mixRgb(wallFill, 0x000000, 0.55);
+    const bevel = Math.max(2, this.cellSize * 0.09);
     for (const wall of state.walls) {
       const [xText, yText] = wall.split(",");
       const x = Number(xText);
       const y = Number(yText);
+      const left = x * this.cellSize + 3;
+      const top = y * this.cellSize + 3;
+      const size = this.cellSize - 6;
       this.wallLayer
-        .rect(x * this.cellSize + 3, y * this.cellSize + 3, this.cellSize - 6, this.cellSize - 6)
+        // Base block.
+        .rect(left, top, size, size)
         .fill({ color: wallFill, alpha: 0.94 })
+        // Top + left highlight (light hits from upper-left).
+        .poly([left, top, left + size, top, left + size - bevel, top + bevel, left + bevel, top + bevel, left + bevel, top + size - bevel, left, top + size])
+        .fill({ color: highlight, alpha: 0.5 })
+        // Bottom + right shadow.
+        .poly([left + size, top, left + size, top + size, left, top + size, left + bevel, top + size - bevel, left + size - bevel, top + size - bevel, left + size - bevel, top + bevel])
+        .fill({ color: shadow, alpha: 0.5 })
         .rect(x * this.cellSize + 5, y * this.cellSize + 5, this.cellSize - 10, this.cellSize - 10)
         .stroke({ width: 2, color: wallStroke, alpha: 0.34 });
+    }
+  }
+
+  /** #115(c): a soft ground shadow under the snake reads as "resting on the
+   * board" rather than floating flat against it — cheap (one Graphics layer,
+   * redrawn alongside the rest of the snake each frame it actually moves). */
+  private drawSnakeShadow(points: Vec2[], snakeStyle: GameState["config"]["snakeStyle"]): void {
+    this.snakeShadowLayer.clear();
+    if (points.length === 0) return;
+    const offset = this.cellSize * 0.06;
+    const radiusX = this.cellSize * (snakeStyle === "google" ? 0.46 : 0.34);
+    const radiusY = radiusX * 0.62;
+    for (const point of points) {
+      const cx = point.x * this.cellSize + this.cellSize / 2 + offset;
+      const cy = point.y * this.cellSize + this.cellSize / 2 + offset;
+      this.snakeShadowLayer.ellipse(cx, cy, radiusX, radiusY).fill({ color: 0x000000, alpha: 0.22 });
     }
   }
 

@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { createSpeedMeter, addComment, decay, cappedEffectiveSpeed, MIN_MULTIPLIER, MAX_MULTIPLIER, MAX_EFFECTIVE_SPEED } from "./SpeedMeter";
+import { createSpeedMeter, addComment, addPassiveComment, decay, cappedEffectiveSpeed, MIN_MULTIPLIER, MAX_MULTIPLIER, MAX_EFFECTIVE_SPEED } from "./SpeedMeter";
 
 describe("SpeedMeter", () => {
   test("starts at the minimum multiplier", () => {
@@ -42,6 +42,32 @@ describe("SpeedMeter", () => {
     let meter = createSpeedMeter();
     meter = decay(meter, 1000);
     expect(meter.multiplier).toBeGreaterThanOrEqual(MIN_MULTIPLIER);
+  });
+});
+
+describe("addPassiveComment (#108 — 'MORE CHAT = FASTER' applies to any comment)", () => {
+  test("a plain comment (no 'speed' command) still increases the multiplier", () => {
+    const meter = createSpeedMeter();
+    const next = addPassiveComment(meter);
+    expect(next.multiplier).toBeGreaterThan(meter.multiplier);
+  });
+
+  test("a passive comment's bump is smaller than the dedicated 'speed' command's", () => {
+    const passive = addPassiveComment(createSpeedMeter());
+    const command = addComment(createSpeedMeter());
+    expect(passive.charge).toBeLessThan(command.charge);
+  });
+
+  test("multiplier never exceeds the maximum however many passive comments arrive", () => {
+    let meter = createSpeedMeter();
+    for (let i = 0; i < 500; i++) meter = addPassiveComment(meter);
+    expect(meter.multiplier).toBeLessThanOrEqual(MAX_MULTIPLIER);
+  });
+
+  test("locked meters ignore passive comment boosts too", () => {
+    const meter = createSpeedMeter(3);
+    const next = addPassiveComment(meter, true);
+    expect(next.multiplier).toBe(3);
   });
 });
 

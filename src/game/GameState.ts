@@ -104,26 +104,33 @@ function firstOpenCell(boardWidth: number, boardHeight: number, walls: Set<strin
   return { x: 0, y: 0 };
 }
 
+/** A recursive-backtracker maze normally carves a lattice of "node" cells
+ * spaced 2 apart, with a wall-or-corridor cell between each pair of adjacent
+ * nodes. Anchoring that lattice to the far edge (width-1 / height-1) instead
+ * of always starting at 0 means an even dimension still lands a node exactly
+ * on that border — only the one edge that can't also be a node (only one
+ * parity can hit both ends unless the dimension is odd) ends up as a single
+ * genuine boundary wall, never a free ring around the whole board and never
+ * an extra dead strip inside it. Because this is a spanning TREE (no loops),
+ * full connectivity and "no fully-walled internal row/column" both follow
+ * automatically: a disconnecting row/column would require a cycle around it,
+ * which a tree by definition cannot contain.
+ */
 function generateMazeWalls(config: GameConfig, rng: Rng): Set<string> {
   const width = config.boardWidth;
   const height = config.boardHeight;
-  const mazeWidth = width % 2 === 0 ? width - 1 : width;
-  const mazeHeight = height % 2 === 0 ? height - 1 : height;
-  const carved = new Set<string>();
-  const visited = new Set<string>();
-  const stack: Vec2[] = [{ x: 1, y: 1 }];
-  const directions = [
+  const parityX = (width - 1) % 2;
+  const parityY = (height - 1) % 2;
+
+  const nodeDirections = [
     { x: 2, y: 0 },
     { x: -2, y: 0 },
     { x: 0, y: 2 },
     { x: 0, y: -2 },
   ];
 
-  const insideMaze = (pos: Vec2): boolean =>
-    pos.x > 0 && pos.y > 0 && pos.x < mazeWidth - 1 && pos.y < mazeHeight - 1;
-
-  const shuffleDirections = (): typeof directions => {
-    const copy = [...directions];
+  const shuffled = (): typeof nodeDirections => {
+    const copy = [...nodeDirections];
     for (let i = copy.length - 1; i > 0; i--) {
       const j = Math.floor(rng() * (i + 1));
       [copy[i], copy[j]] = [copy[j]!, copy[i]!];
@@ -131,23 +138,23 @@ function generateMazeWalls(config: GameConfig, rng: Rng): Set<string> {
     return copy;
   };
 
-  carved.add("1,1");
-  visited.add("1,1");
+  const start: Vec2 = { x: parityX, y: parityY };
+  const carved = new Set<string>([cellKey(start)]);
+  const visited = new Set<string>([cellKey(start)]);
+  const stack: Vec2[] = [start];
 
   while (stack.length > 0) {
     const current = stack[stack.length - 1]!;
-    const nextDirection = shuffleDirections().find((dir) => {
-      const next = { x: current.x + dir.x, y: current.y + dir.y };
-      return insideMaze(next) && !visited.has(cellKey(next));
-    });
+    const next = shuffled()
+      .map((dir) => ({ x: current.x + dir.x, y: current.y + dir.y }))
+      .find((pos) => pos.x >= 0 && pos.y >= 0 && pos.x < width && pos.y < height && !visited.has(cellKey(pos)));
 
-    if (!nextDirection) {
+    if (!next) {
       stack.pop();
       continue;
     }
 
-    const next = { x: current.x + nextDirection.x, y: current.y + nextDirection.y };
-    const between = { x: current.x + nextDirection.x / 2, y: current.y + nextDirection.y / 2 };
+    const between = { x: (current.x + next.x) / 2, y: (current.y + next.y) / 2 };
     visited.add(cellKey(next));
     carved.add(cellKey(between));
     carved.add(cellKey(next));
@@ -158,15 +165,56 @@ function generateMazeWalls(config: GameConfig, rng: Rng): Set<string> {
   for (let x = 0; x < width; x++) {
     for (let y = 0; y < height; y++) {
       const pos = { x, y };
-      const onBorder = x === 0 || y === 0 || x === width - 1 || y === height - 1;
-      if (onBorder) continue;
       if (!carved.has(cellKey(pos))) walls.add(cellKey(pos));
     }
   }
+  return braidMaze(width, height, walls, rng, MAZE_BRAID_FRACTION);
+}
 
-  const reserved = new Set(["1,1", "1,2", "2,1", "2,2"]);
-  for (const cell of reserved) walls.delete(cell);
-  return walls;
+// A pure spanning tree has no loops at all, which means every branch that
+// isn't exactly where the round ends is an unconditional trap: the no-U-turn
+// rule blocks ever backing out of a 1-wide dead-end corridor, no matter how
+// far away it is. A real maze still needs *some* alternate routes for a
+// growing snake to have any realistic chance of surviving to a food goal —
+// braiding at 1.0 resolves every dead end into a small loop, so the "maze"
+// keeps its 1-wide-corridor character (most cells still have only 2 open
+// neighbors) without the guaranteed-fatal branches a true tree produces.
+const MAZE_BRAID_FRACTION = 1;
+
+/** Resolves dead ends into small loops: for each free cell with exactly one
+ * free neighbor (a leaf of the spanning tree), knock down one of its wall
+ * neighbors that also touches a *different* already-free cell, connecting
+ * the dead end to another part of the maze. Braiding only ever removes
+ * walls, so it can only add connectivity — it can never break the
+ * invariants generateMazeWalls already guarantees (full connectivity, no
+ * dead strip, a bordered perimeter). */
+function braidMaze(width: number, height: number, walls: Set<string>, rng: Rng, fraction: number): Set<string> {
+  const result = new Set(walls);
+  const isFree = (pos: Vec2): boolean => inBounds(pos, width, height) && !result.has(cellKey(pos));
+
+  const deadEnds: Vec2[] = [];
+  for (let x = 0; x < width; x++) {
+    for (let y = 0; y < height; y++) {
+      const pos = { x, y };
+      if (!isFree(pos)) continue;
+      if (neighbors4(pos).filter(isFree).length === 1) deadEnds.push(pos);
+    }
+  }
+
+  for (const deadEnd of deadEnds) {
+    if (rng() > fraction) continue;
+    const candidates = neighbors4(deadEnd).filter((wallPos) => {
+      if (!inBounds(wallPos, width, height) || isFree(wallPos)) return false;
+      return neighbors4(wallPos).some(
+        (beyond) => !(beyond.x === deadEnd.x && beyond.y === deadEnd.y) && isFree(beyond),
+      );
+    });
+    if (candidates.length === 0) continue;
+    const chosen = candidates[Math.floor(rng() * candidates.length) % candidates.length]!;
+    result.delete(cellKey(chosen));
+  }
+
+  return result;
 }
 
 function initialWalls(config: GameConfig, rng: Rng): Set<string> {
@@ -185,16 +233,59 @@ function initialSnake(config: GameConfig, walls: Set<string>): { snake: Vec2[]; 
     };
   }
 
-  const anchor = firstOpenCell(config.boardWidth, config.boardHeight, walls, [
-    { x: 1, y: 1 },
-    { x: 1, y: 2 },
-    { x: 2, y: 1 },
-  ]);
-  const neighbors = neighbors4(anchor).filter((pos) => inBounds(pos, config.boardWidth, config.boardHeight) && !walls.has(cellKey(pos)));
-  const tail = neighbors.find((pos) => pos.y > anchor.y) ?? neighbors.find((pos) => pos.x > anchor.x) ?? neighbors[0] ?? { x: 1, y: 2 };
+  const isFree = (pos: Vec2): boolean =>
+    inBounds(pos, config.boardWidth, config.boardHeight) && !walls.has(cellKey(pos));
+  const pickTail = (anchor: Vec2, free: Vec2[]): Vec2 =>
+    free.find((pos) => pos.y > anchor.y) ?? free.find((pos) => pos.x > anchor.x) ?? free[0]!;
+
+  // The maze generator's own DFS start cell is *always* a degree-1 leaf: its
+  // neighbors all get absorbed into other branches before backtracking ever
+  // returns to try a second edge from it. Spawning there (or nearby, on that
+  // same terminal branch) means the snake's very first non-reversal move can
+  // head straight down a dead end. A true junction (3+ free neighbors) can
+  // never be a simple dead-end branch member, so scan for one instead of
+  // trusting a fixed corner near the generator's start cell.
+  const preferred = [{ x: 1, y: 1 }, { x: 1, y: 2 }, { x: 2, y: 1 }];
+  const isJunction = (cell: Vec2): Vec2[] | null => {
+    if (!isFree(cell)) return null;
+    const free = neighbors4(cell).filter(isFree);
+    return free.length >= 3 ? free : null;
+  };
+
+  let anchor: Vec2 | null = null;
+  let free: Vec2[] = [];
+  for (const cell of preferred) {
+    const result = isJunction(cell);
+    if (result) {
+      anchor = cell;
+      free = result;
+      break;
+    }
+  }
+  if (!anchor) {
+    outer: for (let y = 0; y < config.boardHeight; y++) {
+      for (let x = 0; x < config.boardWidth; x++) {
+        const result = isJunction({ x, y });
+        if (result) {
+          anchor = { x, y };
+          free = result;
+          break outer;
+        }
+      }
+    }
+  }
+  // Degenerate fallback (no junction anywhere — an extremely thin maze) —
+  // same best-effort last resort as before.
+  if (!anchor) {
+    anchor = firstOpenCell(config.boardWidth, config.boardHeight, walls, preferred);
+    free = neighbors4(anchor).filter(isFree);
+  }
+  const finalAnchor = anchor;
+
+  const tail = free.length > 0 ? pickTail(finalAnchor, free) : { x: finalAnchor.x, y: finalAnchor.y + 1 };
   return {
-    snake: [anchor, tail],
-    direction: tail.x < anchor.x ? "right" : tail.x > anchor.x ? "left" : tail.y < anchor.y ? "down" : "up",
+    snake: [finalAnchor, tail],
+    direction: tail.x < finalAnchor.x ? "right" : tail.x > finalAnchor.x ? "left" : tail.y < finalAnchor.y ? "down" : "up",
   };
 }
 
@@ -261,6 +352,37 @@ function safeSpawnCandidates(config: GameConfig, snake: Vec2[], foods: BoardFood
   return free;
 }
 
+function bfsDistances(start: Vec2, occupied: Set<string>, boardWidth: number, boardHeight: number): Map<string, number> {
+  const dist = new Map<string, number>();
+  const startKey = cellKey(start);
+  if (occupied.has(startKey)) return dist;
+  dist.set(startKey, 0);
+  const queue: Vec2[] = [start];
+  let cursor = 0;
+  while (cursor < queue.length) {
+    const current = queue[cursor++]!;
+    const currentDist = dist.get(cellKey(current))!;
+    for (const next of neighbors4(current)) {
+      const nextKey = cellKey(next);
+      if (!inBounds(next, boardWidth, boardHeight) || occupied.has(nextKey) || dist.has(nextKey)) continue;
+      dist.set(nextKey, currentDist + 1);
+      queue.push(next);
+    }
+  }
+  return dist;
+}
+
+/** Quadrant index (0–3) a cell falls into, splitting the board at its
+ * midpoints. Used only to bias maze_harvest spawns away from wherever the
+ * head currently is (#114) — the head's own quadrant changes as it moves,
+ * so "avoid the head's current quadrant" naturally alternates regions over
+ * a round without needing any persisted spawn history. */
+function quadrantOf(pos: Vec2, boardWidth: number, boardHeight: number): number {
+  return (pos.x < boardWidth / 2 ? 0 : 1) + (pos.y < boardHeight / 2 ? 0 : 2);
+}
+
+const MIN_MAZE_SPAWN_DISTANCE = 2;
+
 /** The one spawn path every food origin (initial, reposition, avatar, queue
  * promotion) must go through: prefer a cell the head can actually reach with
  * room to maneuver, falling back to any free cell only when the board is so
@@ -268,21 +390,63 @@ function safeSpawnCandidates(config: GameConfig, snake: Vec2[], foods: BoardFood
  * has no loops to circle back through, so committing to a straight dead-end
  * stretch to reach food is the actual cause of traps — junction cells (3+
  * open neighbors) keep an escape option open, so prefer those when any
- * exist instead of treating every 2-neighbor corridor cell as equally safe. */
+ * exist instead of treating every 2-neighbor corridor cell as equally safe.
+ * #114: on a maze, also bias toward cells far from the head (forces actual
+ * exploration instead of endless food right next to the snake) and, in
+ * maze_harvest specifically, toward the quadrant the head *isn't* currently
+ * in — both fall back gracefully when the board is too tight to satisfy. */
 function pickSafeSpawn(config: GameConfig, snake: Vec2[], foods: BoardFood[], walls: Set<string>, rng: Rng): Vec2 {
   const safeCandidates = safeSpawnCandidates(config, snake, foods, walls);
   if (safeCandidates.length > 0) {
     if (walls.size > 0) {
       const occupied = occupiedCells({ snake, foods, walls });
-      const junctions = safeCandidates.filter(
+      const bodyBlocked = new Set([...snake.slice(1, -1).map(cellKey), ...walls]);
+      const distances = bfsDistances(snake[0]!, bodyBlocked, config.boardWidth, config.boardHeight);
+      const farEnough = safeCandidates.filter((pos) => (distances.get(cellKey(pos)) ?? 0) >= MIN_MAZE_SPAWN_DISTANCE);
+      let pool = farEnough.length > 0 ? farEnough : safeCandidates;
+
+      if (config.gameMode === "maze_harvest") {
+        const headQuadrant = quadrantOf(snake[0]!, config.boardWidth, config.boardHeight);
+        const otherQuadrant = pool.filter(
+          (pos) => quadrantOf(pos, config.boardWidth, config.boardHeight) !== headQuadrant,
+        );
+        if (otherQuadrant.length > 0) pool = otherQuadrant;
+      }
+
+      const junctions = pool.filter(
         (pos) => freeNeighborCount(pos, occupied, config.boardWidth, config.boardHeight) >= 3,
       );
       if (junctions.length > 0) return randomChoice(junctions, rng);
+      return randomChoice(pool, rng);
     }
     return randomChoice(safeCandidates, rng);
   }
   const occupied = occupiedCells({ snake, foods, walls });
   return randomEmptyCell(config.boardWidth, config.boardHeight, occupied, rng);
+}
+
+/** In full_food mode every free cell already holds a basic food (the mode's
+ * whole premise), so pickSafeSpawn's search for an empty cell always comes
+ * up dry and falls back to a stale default position that likely overlaps
+ * the snake or another food. Swap the avatar onto an existing basic food's
+ * cell instead — the displaced basic food is simply removed (the board
+ * still ends up as full as it was, just with one cell now an avatar).
+ * Returns null when there's no basic food left to swap onto (a fully
+ * avatar-packed board); the caller should queue instead of spawning. */
+function pickAvatarSpawn(
+  config: GameConfig,
+  snake: Vec2[],
+  foods: BoardFood[],
+  walls: Set<string>,
+  rng: Rng,
+): { pos: Vec2; foods: BoardFood[] } | null {
+  if (config.gameMode === "full_food") {
+    const basicFoods = foods.filter((food) => food.kind === "basic");
+    if (basicFoods.length === 0) return null;
+    const target = randomChoice(basicFoods, rng);
+    return { pos: target.pos, foods: foods.filter((food) => food.id !== target.id) };
+  }
+  return { pos: pickSafeSpawn(config, snake, foods, walls, rng), foods };
 }
 
 const STUCK_FOOD_RELOCATE_TICKS = 8;
@@ -435,6 +599,10 @@ function maybeAddPuddingWall(state: GameState, snake: Vec2[], foods: BoardFood[]
       const key = cellKey(pos);
       if (blocked.has(key)) continue;
       if (Math.abs(pos.x - snake[0]!.x) + Math.abs(pos.y - snake[0]!.y) <= 3) continue;
+      // #116: never "cage" the current food by placing a wall directly next
+      // to it (4-neighbor adjacency) — a wall there can start boxing food in
+      // just as it's about to be chased, which reads as unfair on stream.
+      if (foods.some((food) => neighbors4(pos).some((n) => n.x === food.pos.x && n.y === food.pos.y))) continue;
       if (neighbors4(pos).some((neighbor) => state.walls.has(cellKey(neighbor)))) continue;
       if (freeNeighborCount(pos, blocked, state.config.boardWidth, state.config.boardHeight) < 2) continue;
       if (createsSolidBlock(pos, state.walls, state.config.boardWidth, state.config.boardHeight)) continue;
@@ -463,9 +631,10 @@ function ensureBasicFood(state: GameState, rng: Rng): BoardFood[] {
 function promoteQueuedFood(state: GameState, foods: BoardFood[], queue: BoardFood[], rng: Rng): { foods: BoardFood[]; queue: BoardFood[] } {
   if (queue.length === 0) return { foods, queue };
   const [promoted, ...rest] = queue;
-  const pos = pickSafeSpawn(state.config, state.snake, foods, state.walls, rng);
+  const spawn = pickAvatarSpawn(state.config, state.snake, foods, state.walls, rng);
+  if (!spawn) return { foods, queue };
   return {
-    foods: [...foods, { ...promoted, pos }],
+    foods: [...spawn.foods, { ...promoted, pos: spawn.pos }],
     queue: rest,
   };
 }
@@ -582,10 +751,33 @@ export function enqueueAvatarFood(state: GameState, food: Omit<AvatarFood, "pos"
   };
   const avatarCount = state.foods.filter((entry) => entry.kind === "avatar").length;
   if (avatarCount < state.config.maxAvatarFoods) {
-    const pos = pickSafeSpawn(state.config, state.snake, state.foods, state.walls, rng);
-    return { ...state, foods: [...state.foods, { ...avatarFood, pos }] };
+    const spawn = pickAvatarSpawn(state.config, state.snake, state.foods, state.walls, rng);
+    if (spawn) return { ...state, foods: [...spawn.foods, { ...avatarFood, pos: spawn.pos }] };
   }
   return { ...state, foodQueue: [...state.foodQueue, avatarFood] };
+}
+
+/** The chat-facing identity of an avatar food — enough to re-request it via
+ * enqueueAvatarFood, independent of wherever it happened to be sitting. */
+export type PendingAvatarFood = { id: string; avatarUrl: string; authorName: string };
+
+/** Collects every avatar food still owed to a viewer at the end of a round —
+ * both ones already on the board (not yet eaten) and ones still waiting in
+ * the queue — so a round reset can carry them over instead of silently
+ * discarding a viewer's requested homage (#111). */
+export function carryOverAvatarFoods(state: GameState): PendingAvatarFood[] {
+  const fromBoard = state.foods
+    .filter((food) => food.kind === "avatar")
+    .map((food) => ({ id: food.id, avatarUrl: food.avatarUrl!, authorName: food.authorName! }));
+  const fromQueue = state.foodQueue.map((food) => ({ id: food.id, avatarUrl: food.avatarUrl!, authorName: food.authorName! }));
+  return [...fromBoard, ...fromQueue];
+}
+
+/** Re-requests each carried-over avatar food on a fresh round's state, via
+ * the same enqueueAvatarFood path a live chat message would use (spawns
+ * immediately if there's room, queues otherwise). */
+export function reenqueueAvatarFoods(state: GameState, avatars: PendingAvatarFood[], rng: Rng = Math.random): GameState {
+  return avatars.reduce((next, avatar) => enqueueAvatarFood(next, avatar, rng), state);
 }
 
 export function nextGrowthConfig(config: GameConfig): GameConfig {

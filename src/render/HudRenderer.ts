@@ -5,6 +5,7 @@ import { LAYOUT, COLORS, SCREEN_WIDTH } from "./layout";
 import { TextureCache } from "./TextureCache";
 import { reconcileSlots } from "./leaderboardTextures";
 import { MAX_MULTIPLIER, MIN_MULTIPLIER } from "../game/SpeedMeter";
+import { HUD_STRINGS, formatGameMode, formatMapTheme } from "./strings";
 
 const LEADERBOARD_ROWS = 3;
 const NOTIFICATION_LIFETIME_MS = 2200;
@@ -24,40 +25,16 @@ function label(text: string, size: number, fill: number = COLORS.hud): Text {
   });
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-function formatMapTheme(theme: MapThemeId): string {
-  switch (theme) {
-    case "heart":
-      return "Heart";
-    case "brazil":
-      return "Brasil";
-    case "france":
-      return "França";
-    case "norway":
-      return "Noruega";
-    case "creeper":
-      return "Creeper";
-    default:
-      return "Classic";
+/** #112: setSpeed/setCounters/setScene are all called once per render frame
+ * (60fps) from main.ts's ticker, but the values they carry only actually
+ * change once per game tick (every few hundred ms) — most frames redraw
+ * identical Graphics geometry and reassign identical Text strings for
+ * nothing. A shallow-equal guard turns those into no-ops. */
+export function shallowEqual<T extends Record<string, unknown>>(a: T, b: T): boolean {
+  for (const key in a) {
+    if (a[key] !== b[key]) return false;
   }
-}
-
-function formatGameMode(mode: GameMode): string {
-  switch (mode) {
-    case "full_food":
-      return "Full map";
-    case "maze_race":
-      return "Maze sprint";
-    case "maze_harvest":
-      return "Maze flow";
-    case "pudding":
-      return "Dynamic blocks";
-    default:
-      return "Classic run";
-  }
+  return true;
 }
 
 export class HudRenderer {
@@ -69,30 +46,34 @@ export class HudRenderer {
   private shortsContainer = new Container();
 
   private liveChrome = new Graphics();
+  private livePulseDot = new Graphics();
   private liveSpeedBarFill = new Graphics();
   private liveSpeedLabel = label(`x${MIN_MULTIPLIER.toFixed(1)}`, 30, COLORS.speedBarFill);
-  private liveBadgeText = label("Classic - Classic run", 22, 0x89f7ff);
-  private liveWinsText = label("WINS 0", 30, COLORS.heroGold);
-  private liveFoodText = label("FOOD 0", 22, COLORS.heroGold);
+  private liveBadgeText = label(`${formatMapTheme("classic")} - ${formatGameMode("classic")}`, 22, 0x89f7ff);
+  private liveWinsText = label(HUD_STRINGS.wins("0"), 30, COLORS.heroGold);
+  private liveFoodText = label(HUD_STRINGS.food("0"), 22, COLORS.heroGold);
   private liveTimerText = label("00:00.000", 22, COLORS.hud);
-  private liveLevelText = label("LV 1", 22, COLORS.hudMuted);
-  private liveLeaderboardTitle = label("TOP VIEWERS", 35);
+  private liveLevelText = label(HUD_STRINGS.level(1), 22, COLORS.hudMuted);
+  private liveLeaderboardTitle = label(HUD_STRINGS.topViewersTitle, 35);
   private liveTierTexts: Text[] = [];
 
+  // v3.1: the video HUD keeps only what a viewer actually uses — a pulsing
+  // live badge, the two chat commands WITH their purpose, the stat pills,
+  // the leaderboard and the d-pad. No narration headlines, no board-%
+  // chatter (André's feedback: "a pessoa que está assistindo quer ver só o
+  // jogo acontecendo" + "tem que ter o para-que-serve de cada comando").
   private shortsChrome = new Graphics();
-  private shortsBrandText = label("SNAKE LIVE", 26, 0xbefc58);
-  private shortsHeadlineText = label("READY TO HUNT", 46, COLORS.hud);
-  private shortsSublineText = label("Fast reads, smooth turns, and a clean line to the fruit.", 24, 0xe3ffd0);
-  private shortsMapModeText = label("Classic - Classic run", 24, 0x89f7ff);
-  private shortsSpeedText = label("SPEED x1.0", 24, 0x111111);
-  private shortsWinsText = label("WINS 0", 24, 0x111111);
-  private shortsFoodText = label("FOOD 0", 24, 0x111111);
+  private shortsLiveDot = new Graphics();
+  private shortsBrandText = label(HUD_STRINGS.liveBadge, 26, 0xff5a5a);
+  private shortsCommentHeader = label(HUD_STRINGS.commentHeader, 24, COLORS.hudMuted);
+  private shortsFoodCommand = label(HUD_STRINGS.foodCommand, 44, COLORS.heroGold);
+  private shortsSpeedCommand = label(HUD_STRINGS.speedCommand, 44, 0x72f6d1);
+  private shortsMapModeText = label(`${formatMapTheme("classic")} - ${formatGameMode("classic")}`, 20, 0x89f7ff);
+  private shortsSpeedText = label(HUD_STRINGS.speed("1.0"), 24, 0x111111);
+  private shortsWinsText = label(HUD_STRINGS.wins("0"), 24, 0x111111);
+  private shortsFoodText = label(HUD_STRINGS.food("0"), 24, 0x111111);
   private shortsTimerText = label("00:00.000", 24, 0x111111);
-  private shortsCoverageText = label("BOARD 0%", 26, COLORS.hud);
-  private shortsSupportText = label("Length 0 - Queue 0", 22, 0xe3ffd0);
-  private shortsMetaText = label("Food 0 - clean route", 22, 0x89f7ff);
-  private shortsLeaderboardTitle = label("RUN DATA", 30, 0x111111);
-  private shortsCoverageBar = new Graphics();
+  private shortsLeaderboardTitle = label(HUD_STRINGS.topChatTitle, 30, 0x9df6d8);
   private shortsDpad = new Graphics();
   private shortsDpadTexts: Record<Direction, Text> = {
     up: label("^", 30, 0xcaf7ff),
@@ -110,8 +91,10 @@ export class HudRenderer {
   private notificationBg = new Graphics();
   private notificationTimer: ReturnType<typeof setTimeout> | null = null;
 
+  private lastSpeedMultiplier: number | null = null;
+  private lastTop: LeaderboardEntry[] = [];
+
   private counters = {
-    subscribers: 0,
     victories: 0,
     breads: 0,
     timer: "00:00.000",
@@ -156,6 +139,18 @@ export class HudRenderer {
     this.setInterfaceMode("live");
   }
 
+  /** Per-frame animation hook (called from the app ticker): pulses the
+   * "AO VIVO" dot so the badge reads as genuinely live. Deliberately the
+   * only thing here — everything else in the HUD is dirty-checked (#112). */
+  tick(now: number = performance.now()): void {
+    const pulse = 0.35 + 0.65 * (0.5 + 0.5 * Math.sin(now / 380));
+    this.shortsLiveDot.alpha = pulse;
+    this.livePulseDot.alpha = pulse;
+    const scale = 0.85 + 0.3 * (0.5 + 0.5 * Math.sin(now / 380));
+    this.shortsLiveDot.scale.set(scale, scale);
+    this.livePulseDot.scale.set(scale, scale);
+  }
+
   setInterfaceMode(mode: InterfaceMode): void {
     this.mode = mode;
     this.liveContainer.visible = mode === "live";
@@ -163,27 +158,24 @@ export class HudRenderer {
     this.positionNotification();
     this.updateCounterTexts();
     this.updateShortsTexts();
-    this.layoutLeaderboard();
+    // Re-render the rows for the new mode's geometry — and on a fresh round
+    // with no chat yet, this is also what paints the "aguardando atividade"
+    // placeholders instead of leaving the panel blank.
+    this.setLeaderboard(this.lastTop);
   }
 
-  setCounters({
-    subscribers,
-    victories,
-    breads,
-    timer,
-    level,
-  }: {
-    subscribers: number;
+  setCounters(next: {
     victories: number;
     breads: number;
     timer: string;
     level: number;
   }): void {
-    this.counters = { subscribers, victories, breads, timer, level };
+    if (shallowEqual(this.counters, next)) return;
+    this.counters = next;
     this.updateCounterTexts();
   }
 
-  setScene(scene: {
+  setScene(next: {
     status: GameStatus;
     mapTheme: MapThemeId;
     gameMode: GameMode;
@@ -195,11 +187,14 @@ export class HudRenderer {
     score: number;
     foodGoal: number | null;
   }): void {
-    this.scene = scene;
+    if (shallowEqual(this.scene, next)) return;
+    this.scene = next;
     this.updateShortsTexts();
   }
 
   setSpeed(multiplier: number): void {
+    if (multiplier === this.lastSpeedMultiplier) return;
+    this.lastSpeedMultiplier = multiplier;
     const ratio = Math.max(0, Math.min(1, (multiplier - MIN_MULTIPLIER) / (MAX_MULTIPLIER - MIN_MULTIPLIER)));
     const bar = LAYOUT.speedBar;
     this.liveSpeedBarFill
@@ -213,7 +208,8 @@ export class HudRenderer {
     this.updateShortsTexts();
   }
 
-  setLeaderboard(top: LeaderboardEntry[], hero: LeaderboardEntry | null): void {
+  setLeaderboard(top: LeaderboardEntry[]): void {
+    this.lastTop = top;
     const nextUrls: Array<string | null> = new Array(LEADERBOARD_ROWS).fill(null);
 
     for (let i = 0; i < LEADERBOARD_ROWS; i++) {
@@ -221,9 +217,10 @@ export class HudRenderer {
       const text = this.leaderboardRows[i]!;
       const avatar = this.leaderboardAvatars[i]!;
       const bg = this.rowBgs[i]!;
-      const y = this.mode === "live" ? LAYOUT.leaderboard.y + 96 + i * 68 : 1618 + i * 72;
+      const y = this.mode === "live" ? LAYOUT.leaderboard.y + 96 + i * 68 : 1508 + i * 72;
       const x = this.mode === "live" ? LAYOUT.leaderboard.x + 22 : 48;
-      const width = this.mode === "live" ? LAYOUT.leaderboard.width - 44 : SCREEN_WIDTH - 96;
+      // Shorts rows stop short of the d-pad box (x=716..972) on their right.
+      const width = this.mode === "live" ? LAYOUT.leaderboard.width - 44 : 640;
 
       bg
         .clear()
@@ -241,14 +238,14 @@ export class HudRenderer {
       avatar.width = this.mode === "live" ? 48 : 46;
       avatar.height = this.mode === "live" ? 48 : 46;
       avatar.x = this.mode === "live" ? LAYOUT.leaderboard.x + 130 : 72;
-      avatar.y = this.mode === "live" ? LAYOUT.leaderboard.y + 104 + i * 68 : 1626 + i * 72;
+      avatar.y = this.mode === "live" ? LAYOUT.leaderboard.y + 104 + i * 68 : 1516 + i * 72;
 
       text.x = this.mode === "live" ? LAYOUT.leaderboard.x + 200 : 126;
-      text.y = this.mode === "live" ? LAYOUT.leaderboard.y + 113 + i * 68 : 1636 + i * 72;
+      text.y = this.mode === "live" ? LAYOUT.leaderboard.y + 113 + i * 68 : 1526 + i * 72;
       text.style.fontSize = this.mode === "live" ? 27 : 22;
 
       if (!entry) {
-        text.text = this.mode === "shorts" ? `${i + 1}. waiting for activity` : "";
+        text.text = this.mode === "shorts" ? HUD_STRINGS.waitingForActivity(i + 1) : "";
         avatar.visible = false;
         continue;
       }
@@ -256,14 +253,10 @@ export class HudRenderer {
       avatar.visible = true;
       text.text =
         this.mode === "live"
-          ? `${i + 1}   ${entry.name}    food ${entry.foodCount}   speed ${entry.speedCount}`
-          : `${i + 1}. ${entry.name}  -  food ${entry.foodCount}  -  speed ${entry.speedCount}`;
+          ? HUD_STRINGS.leaderboardRowLive(i + 1, entry.name, entry.foodCount, entry.speedCount)
+          : HUD_STRINGS.leaderboardRowShorts(i + 1, entry.name, entry.foodCount, entry.speedCount);
       nextUrls[i] = entry.avatarUrl;
     }
-
-    this.shortsSupportText.text = hero
-      ? `Top chat ${hero.name} - food ${hero.foodCount} - speed ${hero.speedCount}`
-      : `Length ${this.scene.snakeLength} - Queue ${this.scene.queuedFoods}`;
 
     const { acquire, release, nextHeld } = reconcileSlots(this.slotUrls, nextUrls);
     for (const { slot, url } of acquire) {
@@ -302,7 +295,7 @@ export class HudRenderer {
   }
 
   private buildLiveHud(): void {
-    const live = label("LIVE", 34);
+    const live = label(HUD_STRINGS.live, 34);
     live.x = 74;
     live.y = 38;
 
@@ -317,33 +310,37 @@ export class HudRenderer {
     this.liveLevelText.x = 974;
     this.liveLevelText.y = 46;
 
-    const command = label("COMMENT", 26, COLORS.hudMuted);
+    const command = label(HUD_STRINGS.commentHeader, 24, COLORS.hudMuted);
     command.x = 64;
-    command.y = 128;
+    command.y = 124;
 
-    const commandBody = label("FOOD OR SPEED", 35, COLORS.heroGold);
-    commandBody.x = 64;
-    commandBody.y = 176;
+    const commandFood = label(HUD_STRINGS.foodCommand, 28, COLORS.heroGold);
+    commandFood.x = 64;
+    commandFood.y = 162;
 
-    const chatTitle = label("MORE CHAT", 25, COLORS.hudMuted);
+    const commandSpeed = label(HUD_STRINGS.speedCommand, 28, 0x72f6d1);
+    commandSpeed.x = 64;
+    commandSpeed.y = 204;
+
+    const chatTitle = label(HUD_STRINGS.chatTitle, 25, COLORS.hudMuted);
     chatTitle.anchor.set(0.5, 0);
     chatTitle.x = SCREEN_WIDTH / 2;
     chatTitle.y = 128;
 
-    const chatBody = label("= FASTER", 29, COLORS.speedBarFill);
+    const chatBody = label(HUD_STRINGS.chatBody, 29, COLORS.speedBarFill);
     chatBody.anchor.set(0.5, 0);
     chatBody.x = SCREEN_WIDTH / 2;
     chatBody.y = 176;
 
-    const objective = label("TOP CHAT", 25, COLORS.hudMuted);
+    const objective = label(HUD_STRINGS.objectiveTitle, 25, COLORS.hudMuted);
     objective.x = 746;
     objective.y = 128;
 
-    const objectiveBody = label("most comments", 25, COLORS.notification);
+    const objectiveBody = label(HUD_STRINGS.objectiveBody, 25, COLORS.notification);
     objectiveBody.x = 742;
     objectiveBody.y = 178;
 
-    const speedTitle = label("COMMENT SPEED", 22);
+    const speedTitle = label(HUD_STRINGS.commentSpeedTitle, 22);
     speedTitle.x = 64;
     speedTitle.y = 292;
 
@@ -369,9 +366,15 @@ export class HudRenderer {
     this.liveLeaderboardTitle.x = LAYOUT.leaderboard.x + 38;
     this.liveLeaderboardTitle.y = LAYOUT.leaderboard.y + 22;
 
+    // Pulsing dot inside the LIVE box (animated in tick()).
+    this.livePulseDot.circle(0, 0, 11).fill(COLORS.hud);
+    this.livePulseDot.x = 58;
+    this.livePulseDot.y = 56;
+
     this.drawLiveChrome();
     this.liveContainer.addChild(
       this.liveChrome,
+      this.livePulseDot,
       live,
       this.liveBadgeText,
       this.liveWinsText,
@@ -379,7 +382,8 @@ export class HudRenderer {
       this.liveTimerText,
       this.liveLevelText,
       command,
-      commandBody,
+      commandFood,
+      commandSpeed,
       chatTitle,
       chatBody,
       objective,
@@ -393,43 +397,35 @@ export class HudRenderer {
   }
 
   private buildShortsHud(): void {
-    this.shortsHeadlineText.style.wordWrap = true;
-    this.shortsHeadlineText.style.wordWrapWidth = 570;
-    this.shortsSublineText.style.wordWrap = true;
-    this.shortsSublineText.style.wordWrapWidth = 570;
-    this.shortsMapModeText.style.wordWrap = true;
-    this.shortsMapModeText.style.wordWrapWidth = 540;
-    this.shortsSupportText.style.wordWrap = true;
-    this.shortsSupportText.style.wordWrapWidth = 420;
-    this.shortsMetaText.style.wordWrap = true;
-    this.shortsMetaText.style.wordWrapWidth = 420;
+    // Pulsing red dot next to the AO VIVO badge (animated in tick()).
+    this.shortsLiveDot.circle(0, 0, 10).fill(0xff3b3b);
+    this.shortsLiveDot.x = 76;
+    this.shortsLiveDot.y = 68;
+    this.shortsBrandText.x = 96;
+    this.shortsBrandText.y = 52;
 
-    this.shortsBrandText.x = 66;
-    this.shortsBrandText.y = 54;
-    this.shortsHeadlineText.x = 60;
-    this.shortsHeadlineText.y = 112;
-    this.shortsSublineText.x = 62;
-    this.shortsSublineText.y = 170;
-    this.shortsMapModeText.x = 62;
-    this.shortsMapModeText.y = 214;
+    this.shortsCommentHeader.x = 62;
+    this.shortsCommentHeader.y = 94;
+    this.shortsFoodCommand.x = 62;
+    this.shortsFoodCommand.y = 128;
+    this.shortsSpeedCommand.x = 62;
+    this.shortsSpeedCommand.y = 184;
+    this.shortsMapModeText.x = 66;
+    this.shortsMapModeText.y = 244;
 
-    this.shortsSpeedText.x = 734;
-    this.shortsSpeedText.y = 70;
-    this.shortsWinsText.x = 744;
-    this.shortsWinsText.y = 128;
-    this.shortsFoodText.x = 744;
-    this.shortsFoodText.y = 186;
-    this.shortsTimerText.x = 720;
-    this.shortsTimerText.y = 244;
+    // Stat pills sit at x=716..1022 (306 wide, 52 tall) — center each text in
+    // its pill instead of hand-tuned offsets, so longer PT-BR strings
+    // ("VELOCIDADE x1.0") stay framed instead of hugging the pill edge.
+    const pillCenterX = 716 + 306 / 2;
+    const pillTexts = [this.shortsSpeedText, this.shortsWinsText, this.shortsFoodText, this.shortsTimerText];
+    pillTexts.forEach((text, i) => {
+      text.anchor.set(0.5);
+      text.x = pillCenterX;
+      text.y = 48 + i * 58 + 26;
+    });
 
-    this.shortsCoverageText.x = 58;
-    this.shortsCoverageText.y = 1450;
-    this.shortsSupportText.x = 60;
-    this.shortsSupportText.y = 1490;
-    this.shortsMetaText.x = 60;
-    this.shortsMetaText.y = 1532;
     this.shortsLeaderboardTitle.x = 60;
-    this.shortsLeaderboardTitle.y = 1582;
+    this.shortsLeaderboardTitle.y = 1452;
 
     this.shortsDpadTexts.up.x = 826;
     this.shortsDpadTexts.up.y = 1492;
@@ -443,19 +439,17 @@ export class HudRenderer {
     this.drawShortsChrome();
     this.shortsContainer.addChild(
       this.shortsChrome,
+      this.shortsLiveDot,
       this.shortsBrandText,
-      this.shortsHeadlineText,
-      this.shortsSublineText,
+      this.shortsCommentHeader,
+      this.shortsFoodCommand,
+      this.shortsSpeedCommand,
       this.shortsMapModeText,
       this.shortsSpeedText,
       this.shortsWinsText,
       this.shortsFoodText,
       this.shortsTimerText,
-      this.shortsCoverageText,
-      this.shortsSupportText,
-      this.shortsMetaText,
       this.shortsLeaderboardTitle,
-      this.shortsCoverageBar,
       this.shortsDpad,
       this.shortsDpadTexts.up,
       this.shortsDpadTexts.left,
@@ -465,65 +459,23 @@ export class HudRenderer {
   }
 
   private updateCounterTexts(): void {
-    this.liveWinsText.text = `WINS ${this.counters.victories.toLocaleString("en-US")}`;
-    this.liveFoodText.text = `FOOD ${this.counters.breads.toLocaleString("en-US")}`;
+    this.liveWinsText.text = HUD_STRINGS.wins(this.counters.victories.toLocaleString("pt-BR"));
+    this.liveFoodText.text = HUD_STRINGS.food(this.counters.breads.toLocaleString("pt-BR"));
     this.liveTimerText.text = this.counters.timer;
-    this.liveLevelText.text = `LV ${this.counters.level}`;
+    this.liveLevelText.text = HUD_STRINGS.level(this.counters.level);
 
-    this.shortsWinsText.text = `WINS ${this.counters.victories.toLocaleString("en-US")}`;
-    this.shortsFoodText.text = `FOOD ${this.counters.breads.toLocaleString("en-US")}`;
+    this.shortsWinsText.text = HUD_STRINGS.wins(this.counters.victories.toLocaleString("pt-BR"));
+    this.shortsFoodText.text = HUD_STRINGS.food(this.counters.breads.toLocaleString("pt-BR"));
     this.shortsTimerText.text = this.counters.timer;
   }
 
   private updateShortsTexts(): void {
-    const { foodGoal } = this.scene;
-    // A round with a food goal measures progress by score, not board
-    // coverage — the board itself may never fill (large maps, or walls
-    // eating into the playable space in maze/pudding modes).
-    const progress = foodGoal !== null ? clamp(this.scene.score / foodGoal, 0, 1) : clamp(this.scene.coverage, 0, 1);
-    const progressLabel = foodGoal !== null ? `GOAL ${this.scene.score}/${foodGoal}` : `BOARD ${Math.round(progress * 100)}%`;
     const mapLabel = formatMapTheme(this.scene.mapTheme);
     const modeLabel = formatGameMode(this.scene.gameMode);
 
     this.shortsMapModeText.text = `${mapLabel} - ${modeLabel}`;
     this.liveBadgeText.text = `${mapLabel} - ${modeLabel}`;
-    this.shortsCoverageText.text = progressLabel;
-    this.shortsSpeedText.text = `SPEED x${this.scene.speed.toFixed(1)}`;
-    this.shortsSupportText.text = `Length ${this.scene.snakeLength} - Queue ${this.scene.queuedFoods}`;
-    this.shortsMetaText.text = `Food ${this.scene.score} - ${mapLabel} - ${modeLabel}`;
-
-    const coverage = progress; // headline/bar thresholds below read on progress either way
-    if (this.scene.status === "victory") {
-      this.shortsHeadlineText.text = foodGoal !== null ? "GOAL REACHED" : "BOARD CLEARED";
-      this.shortsSublineText.text = foodGoal !== null
-        ? `Food goal of ${foodGoal} hit. A fresh run starts right after the win.`
-        : "Full coverage locked in. A fresh run starts right after the win.";
-    } else if (this.scene.status === "lost") {
-      this.shortsHeadlineText.text = "ROUGH RESET";
-      this.shortsSublineText.text = "The line clipped out. Another attempt starts in two seconds.";
-    } else if (coverage > 0.82) {
-      this.shortsHeadlineText.text = "FINAL SWEEP";
-      this.shortsSublineText.text = "Board is tight now. One clean path decides the finish.";
-    } else if (this.scene.speed >= 4.5) {
-      this.shortsHeadlineText.text = "CHASE MODE";
-      this.shortsSublineText.text = "Speed is hot. The route is compressing and the run gets sharper.";
-    } else if (coverage > 0.58) {
-      this.shortsHeadlineText.text = "TIGHT CORRIDOR";
-      this.shortsSublineText.text = "The snake is folding into smaller lanes while still chasing fruit.";
-    } else if (coverage < 0.18) {
-      this.shortsHeadlineText.text = "OPENING RUN";
-      this.shortsSublineText.text = "Plenty of space, direct turns, and clean pressure on the next fruit.";
-    } else {
-      this.shortsHeadlineText.text = "CLEAN PATH";
-      this.shortsSublineText.text = "Smooth corners, readable movement, and a sharp route into the next fruit.";
-    }
-
-    this.shortsCoverageBar
-      .clear()
-      .roundRect(56, 1560, 420, 10, 999)
-      .fill({ color: 0x162220, alpha: 0.96 })
-      .roundRect(56, 1560, Math.max(16, 420 * coverage), 10, 999)
-      .fill({ color: coverage > 0.7 ? COLORS.heroGold : 0x6cf6d0, alpha: 1 });
+    this.shortsSpeedText.text = HUD_STRINGS.speed(this.scene.speed.toFixed(1));
 
     this.drawShortsDpad();
   }
@@ -544,15 +496,6 @@ export class HudRenderer {
         .fill({ color: active ? 0xbefc58 : 0x0b1515, alpha: active ? 1 : 0.94 })
         .stroke({ width: 2, color: active ? 0xffffff : 0x2c6969, alpha: active ? 0.58 : 0.5 });
       this.shortsDpadTexts[button.direction].style.fill = active ? 0x111111 : 0xcaf7ff;
-    }
-  }
-
-  private layoutLeaderboard(): void {
-    for (let i = 0; i < this.leaderboardRows.length; i++) {
-      const entry = this.leaderboardRows[i]!;
-      this.rowBgs[i]!.visible = true;
-      entry.visible = true;
-      this.leaderboardAvatars[i]!.visible = this.slotUrls[i] !== null;
     }
   }
 
@@ -612,15 +555,8 @@ export class HudRenderer {
       .roundRect(34, 1428, SCREEN_WIDTH - 68, 430, 28)
       .fill({ color: 0x061010, alpha: 0.92 })
       .stroke({ width: 2, color: 0x72f6d1, alpha: 0.26 })
-      .roundRect(52, 1604, 456, 228, 20)
-      .fill({ color: 0x081414, alpha: 0.9 })
-      .stroke({ width: 1, color: 0x285d5d, alpha: 0.6 })
       .roundRect(716, 1460, 256, 176, 20)
       .fill({ color: 0x081414, alpha: 0.9 })
-      .stroke({ width: 1, color: 0x285d5d, alpha: 0.6 })
-      .circle(954, 1538, 126)
-      .fill({ color: 0x72f6d1, alpha: 0.06 })
-      .circle(118, 1728, 82)
-      .fill({ color: COLORS.heroGold, alpha: 0.04 });
+      .stroke({ width: 1, color: 0x285d5d, alpha: 0.6 });
   }
 }

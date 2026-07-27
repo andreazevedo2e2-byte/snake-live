@@ -29,3 +29,6 @@ Thumbs.db
 # Media (faixas/áudio grandes ficam fora do git por ora)
 assets/music/*.mp3
 assets/music/*.ogg
+
+# Plano de execução local (regra do BA Hub: nunca publicar no GitHub)
+docs/execucao/

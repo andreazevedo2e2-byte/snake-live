@@ -3,6 +3,7 @@ import { decideMove } from "./decideMove";
 import { createGame, enqueueAvatarFood, setDirection, tick } from "../game/GameState";
 import { DEFAULT_CONFIG, type BoardFood, type GameConfig, type GameState } from "../game/types";
 import { availableVariants, buildCycleOrder, cycleIndex } from "./hamiltonian";
+import { cycleShortcutPath } from "./decideMove";
 
 const cfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 10, boardHeight: 10, maxAvatarFoods: 8 };
 
@@ -300,29 +301,60 @@ describe("rounds with a food goal always finish (no more eternal rounds)", () =>
   test(
     "pudding wins a solid majority of the time (walls placed via #002's fix + junction-preferring spawn)",
     () => {
+      // n=15 with a >0.6 threshold flaked occasionally on ordinary variance
+      // (a 9/15=0.60 run isn't actually >0.60) — n=30 with a >0.5 threshold
+      // keeps real margin below the measured ~65-70% rate while still
+      // catching a real regression.
       let wins = 0;
-      const total = 15;
+      const total = 30;
       for (let game = 0; game < total; game++) {
         if (playConfigToEnd({ boardWidth: 16, boardHeight: 12, gameMode: "pudding" }) === "win") wins++;
       }
-      expect(wins / total).toBeGreaterThan(0.6);
+      expect(wins / total).toBeGreaterThan(0.5);
     },
-    60000,
+    120000,
   );
 
   test(
-    "maze_harvest wins a solid majority of the time (recursive-lookahead pathing, no stall loop)",
+    "maze_harvest wins a meaningful share of the time (real maze, no stall loop)",
     () => {
-      // A maze_harvest board is a spanning tree (no loops), which is a
-      // genuinely harder graph to navigate safely than pudding's open floor
-      // with a few dynamic walls — the win rate here is lower than pudding's
-      // by nature of the topology, not an algorithm regression.
+      // #101 (2026-07-26): the old generator left the entire board perimeter
+      // free (a "moat" ring the snake could circle forever), which happened
+      // to also make the maze trivially escapable — that inflated this
+      // threshold to 0.45. The fixed generator (generateMazeWalls in
+      // GameState.ts) makes the maze occupy the whole board with a real,
+      // fully-connected wall layout; a true spanning tree has zero loops, so
+      // it's braided (every dead end gets one wall knocked down into a small
+      // loop) — without that, a growing snake can never legally back out of
+      // any dead-end corridor (the no-U-turn rule blocks it), so entering
+      // one that doesn't have the winning food is an unconditional trap,
+      // regardless of how clever the pathing heuristic is.
+      // Measured win rate on this fixed, braided maze across several n=40-60
+      // runs: ~17-30% (vs. the old ~37.5% baseline, which was inflated by
+      // the moat bug). n=30 with a >0.1 threshold still flaked occasionally
+      // on ordinary variance (a 3/30=0.10 run isn't actually >0.10) — n=50
+      // with a >0.08 threshold (need ≥5/50) keeps ~2 standard deviations of
+      // margin below the measured mean while still catching a real
+      // regression (e.g. a broken braid step collapsing back toward 0%).
       let wins = 0;
-      const total = 15;
+      const total = 50;
       for (let game = 0; game < total; game++) {
         if (playConfigToEnd({ boardWidth: 18, boardHeight: 14, gameMode: "maze_harvest" }) === "win") wins++;
       }
-      expect(wins / total).toBeGreaterThan(0.45);
+      expect(wins / total).toBeGreaterThan(0.08);
+    },
+    180000,
+  );
+
+  test(
+    "maze_race wins essentially every game now that dead ends are braided into loops",
+    () => {
+      let wins = 0;
+      const total = 15;
+      for (let game = 0; game < total; game++) {
+        if (playConfigToEnd({ boardWidth: 10, boardHeight: 8, gameMode: "maze_race" }) === "win") wins++;
+      }
+      expect(wins / total).toBeGreaterThan(0.7);
     },
     60000,
   );
@@ -446,6 +478,35 @@ describe("cycle shortcut correctness", () => {
 
     expect(gamesRun).toBeGreaterThan(0);
     expect(shortcutsOverEmptyCells).toBe(0);
+  });
+});
+
+describe("cycleShortcutPath never plans a path through the body (#107)", () => {
+  test("across full simulated games (including early game, score < 3), the shortcut path never contains a body cell", () => {
+    let pathsChecked = 0;
+    for (const [w, h] of [[8, 8], [10, 8], [12, 10]] as const) {
+      const variant = availableVariants(w, h)[0]!;
+      const order = buildCycleOrder(w, h, variant);
+      let state: GameState = {
+        ...createGame({ ...DEFAULT_CONFIG, boardWidth: w, boardHeight: h, maxAvatarFoods: 0 }),
+        status: "playing",
+      };
+      for (let t = 0; t < w * h * 3 && state.status === "playing"; t++) {
+        const path = cycleShortcutPath(state, order, w, h);
+        if (path && path.length > 0) {
+          const bodyCells = new Set(state.snake.slice(0, -1).map((seg) => `${seg.x},${seg.y}`));
+          for (const step of path) {
+            expect(bodyCells.has(`${step.x},${step.y}`), `${w}x${h} t=${t} score=${state.score}`).toBe(false);
+          }
+          pathsChecked++;
+        }
+        const dir = decideMove(state, () => 0.5, variant);
+        state = tick(setDirection(state, dir));
+      }
+    }
+    // Sanity check that shortcuts actually fired during these runs — a test
+    // that never exercises the code path under test proves nothing.
+    expect(pathsChecked).toBeGreaterThan(0);
   });
 });
 

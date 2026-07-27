@@ -1,5 +1,5 @@
 import { Application, Assets, Texture } from "pixi.js";
-import { createGame, enqueueAvatarFood, nextGrowthConfig, setDirection, tick } from "./game/GameState";
+import { carryOverAvatarFoods, createGame, enqueueAvatarFood, nextGrowthConfig, reenqueueAvatarFoods, setDirection, tick } from "./game/GameState";
 import {
   DEFAULT_CONFIG,
   type ColorMode,
@@ -13,9 +13,10 @@ import {
 import { decideMove } from "./autopilot/decideMove";
 import { isErrorPhase, pickDeliberateMistake } from "./autopilot/humanError";
 import { availableVariants, type CycleVariant } from "./autopilot/hamiltonian";
-import { addComment, cappedEffectiveSpeed, createSpeedMeter, decay } from "./game/SpeedMeter";
-import { createLeaderboard, creditViewer, getHero, topViewers } from "./game/Leaderboard";
-import { hasStalledTooLong } from "./game/watchdog";
+import { addComment, addPassiveComment, cappedEffectiveSpeed, createSpeedMeter, decay } from "./game/SpeedMeter";
+import { createLeaderboard, creditViewer, topViewers } from "./game/Leaderboard";
+import { hasStalledTooLong, watchdogThresholdMs } from "./game/watchdog";
+import { normalizeOddDimensions } from "./game/boardSize";
 import { BoardRenderer } from "./render/BoardRenderer";
 import { HudRenderer } from "./render/HudRenderer";
 import { ScreensRenderer } from "./render/ScreensRenderer";
@@ -23,6 +24,7 @@ import { TextureCache } from "./render/TextureCache";
 import { AudioManager } from "./audio/AudioManager";
 import { connectChatClient } from "./net/ChatClient";
 import { DEFAULT_AVATAR_URL } from "./chat/normalize";
+import { parseChatCommand } from "./chat/commands";
 import { COLORS, SCREEN_HEIGHT, SCREEN_WIDTH } from "./render/layout";
 
 const BASE_TICK_MS = 420;
@@ -200,10 +202,14 @@ async function main(): Promise<void> {
     const mapTheme = (mapSelect?.value as MapThemeId | undefined) ?? DEFAULT_CONFIG.mapTheme;
     const gameMode = (modeSelect?.value as GameMode | undefined) ?? DEFAULT_CONFIG.gameMode;
     const minSize = minimumBoardSize(mapTheme, gameMode);
+    const rawWidth = clamp(Math.max(Number(widthInput?.value ?? DEFAULT_CONFIG.boardWidth), minSize.width), 8, MAX_START_WIDTH);
+    const rawHeight = clamp(Math.max(Number(heightInput?.value ?? DEFAULT_CONFIG.boardHeight), minSize.height), 6, MAX_START_HEIGHT);
+    const { width: boardWidth, height: boardHeight } = normalizeOddDimensions(rawWidth, rawHeight, MAX_START_HEIGHT);
+    if (heightInput && boardHeight !== rawHeight) heightInput.value = String(boardHeight);
     return {
       ...DEFAULT_CONFIG,
-      boardWidth: clamp(Math.max(Number(widthInput?.value ?? DEFAULT_CONFIG.boardWidth), minSize.width), 8, MAX_START_WIDTH),
-      boardHeight: clamp(Math.max(Number(heightInput?.value ?? DEFAULT_CONFIG.boardHeight), minSize.height), 6, MAX_START_HEIGHT),
+      boardWidth,
+      boardHeight,
       maxAvatarFoods: DEFAULT_CONFIG.maxAvatarFoods,
       mapTheme,
       gameMode,
@@ -280,11 +286,13 @@ async function main(): Promise<void> {
   let autoStartHandle: ReturnType<typeof setTimeout> | null = null;
 
   function resetRound(config: GameConfig, level: number): void {
+    const pendingAvatars = carryOverAvatarFoods(state);
     currentConfig = { ...config };
     currentLevel = level;
     replaceBoard(currentConfig);
     hud.setInterfaceMode(currentConfig.interfaceMode);
-    state = { ...createGame(currentConfig), level: currentLevel };
+    const freshState = { ...createGame(currentConfig), level: currentLevel };
+    state = reenqueueAvatarFoods(freshState, pendingAvatars);
     roundVariant = pickRoundVariant(currentConfig, roundVariant);
     speed = createSpeedMeter(currentConfig.commentSpeedStart);
     lastSpeedMilestone = 1;
@@ -315,7 +323,7 @@ async function main(): Promise<void> {
   }
 
   function refreshLeaderboardHud(): void {
-    hud.setLeaderboard(topViewers(leaderboard, 5), getHero(leaderboard));
+    hud.setLeaderboard(topViewers(leaderboard, 5));
   }
 
   connectChatClient(CHAT_WS_URL, (event) => {
@@ -325,19 +333,24 @@ async function main(): Promise<void> {
       avatarUrl: event.avatarUrl,
     };
 
-    const normalized = event.text.toLowerCase();
-    if (normalized.includes("speed")) {
+    const command = parseChatCommand(event.text);
+    if (command === "speed") {
       leaderboard = creditViewer(leaderboard, viewer, "speed");
       speed = addComment(speed, currentConfig.commentSpeedMode === "fixed");
-      hud.notify(`Speed up! @${event.authorName}`);
-    } else if (normalized.includes("food") || normalized.includes("add")) {
+      hud.notify(`Velocidade! @${event.authorName}`);
+    } else if (command === "food") {
       leaderboard = creditViewer(leaderboard, viewer, "food");
       state = enqueueAvatarFood(state, {
         id: event.id,
         avatarUrl: event.avatarUrl,
         authorName: event.authorName,
       });
-      hud.notify(`Add food! @${event.authorName}`);
+      hud.notify(`Comida adicionada! @${event.authorName}`);
+    } else {
+      // Any other allowed comment still nudges the speed bar a little,
+      // matching the HUD's "MORE CHAT = FASTER" text — see #108.
+      leaderboard = creditViewer(leaderboard, viewer, "comment");
+      speed = addPassiveComment(speed, currentConfig.commentSpeedMode === "fixed");
     }
     refreshLeaderboardHud();
   });
@@ -364,7 +377,7 @@ async function main(): Promise<void> {
       const scoreBefore = state.score;
       const directionBefore = state.direction;
 
-      if (hasStalledTooLong(lastScoreAt, performance.now())) {
+      if (hasStalledTooLong(lastScoreAt, performance.now(), watchdogThresholdMs(currentConfig))) {
         state = { ...state, status: "lost" };
         audio.onLost();
         scheduleAutoStart(() => resetRound(baseConfig, 1));
@@ -433,9 +446,9 @@ async function main(): Promise<void> {
         ? performance.now() - roundStartedAt
         : roundElapsedMs;
     const playableCells = Math.max(1, (state.config.boardWidth * state.config.boardHeight) - state.walls.size);
+    hud.tick();
     hud.setSpeed(effectiveSpeed);
     hud.setCounters({
-      subscribers: 0,
       victories: victoryCount,
       breads: state.score,
       timer: formatTimer(displayElapsedMs),
@@ -471,6 +484,9 @@ async function main(): Promise<void> {
       applyConfig: (config: Partial<GameConfig>) => {
         baseConfig = { ...baseConfig, ...config, foodTypes: config.foodTypes?.length ? config.foodTypes : baseConfig.foodTypes };
         resetRound(baseConfig, 1);
+        // Same flow as the settings panel: without this the new round sits
+        // on the start screen forever.
+        scheduleAutoStart();
       },
     };
   }

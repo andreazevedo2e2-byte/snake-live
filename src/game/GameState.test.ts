@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { createGame, enqueueAvatarFood, setDirection, tick } from "./GameState";
-import { DEFAULT_CONFIG, type BoardFood, type GameConfig } from "./types";
+import { carryOverAvatarFoods, createGame, enqueueAvatarFood, reenqueueAvatarFoods, setDirection, tick } from "./GameState";
+import { DEFAULT_CONFIG, type BoardFood, type GameConfig, type GameState } from "./types";
 
 const smallConfig: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 12, boardHeight: 12, maxAvatarFoods: 8 };
 
@@ -188,13 +188,16 @@ describe("tick victory", () => {
   test("maze race wins as soon as the target fruit is reached", () => {
     const cfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 10, boardHeight: 8, gameMode: "maze_race" };
     let state = createGame(cfg);
-    const head = state.snake[0]!;
+    // Snake/walls set explicitly (not derived from the generated maze, whose
+    // exact tail orientation is legitimately random) so this only exercises
+    // the maze_race victory-on-target-fruit rule in tick().
     state = {
       ...state,
       status: "playing",
       direction: "right",
-      foods: [basicFood({ x: head.x + 1, y: head.y })],
+      snake: [{ x: 2, y: 2 }, { x: 1, y: 2 }],
       walls: new Set(["5,4", "5,5"]),
+      foods: [basicFood({ x: 3, y: 2 })],
     };
     const next = tick(state);
     expect(next.status).toBe("victory");
@@ -204,17 +207,19 @@ describe("tick victory", () => {
   test("maze race does NOT win when a chat avatar food is eaten instead of the target", () => {
     const cfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 10, boardHeight: 8, gameMode: "maze_race", maxAvatarFoods: 3 };
     let state = createGame(cfg);
-    const head = state.snake[0]!;
     // Push the real target fruit far away, and place a viewer's avatar food
     // directly in the snake's path — eating it should score but not end the
     // round; only the target fruit (unaffected here) may trigger victory.
+    // Snake/walls set explicitly for the same reason as the test above.
     state = {
       ...state,
       status: "playing",
       direction: "right",
+      snake: [{ x: 2, y: 2 }, { x: 1, y: 2 }],
+      walls: new Set(),
       foods: [
         { ...state.foods[0]!, pos: { x: 9, y: 7 } },
-        { id: "viewer-1", pos: { x: head.x + 1, y: head.y }, type: "apple_red", kind: "avatar", avatarUrl: "x", authorName: "x" },
+        { id: "viewer-1", pos: { x: 3, y: 2 }, type: "apple_red", kind: "avatar", avatarUrl: "x", authorName: "x" },
       ],
     };
     const next = tick(state);
@@ -328,6 +333,174 @@ describe("avatar foods", () => {
   });
 });
 
+describe("full_food avatar spawn (#105 — never overlaps another cell)", () => {
+  test("in a fully-packed full_food board, the avatar swaps onto an existing basic food's cell", () => {
+    const cfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 6, boardHeight: 6, gameMode: "full_food", maxAvatarFoods: 3 };
+    let state: GameState = { ...createGame(cfg, rngSeq([0])), status: "playing" };
+    const totalFoodsBefore = state.foods.length;
+    expect(state.foods.every((food) => food.kind === "basic")).toBe(true);
+
+    const next = enqueueAvatarFood(state, { id: "viewer-1", avatarUrl: "x", authorName: "x" }, rngSeq([0.9]));
+
+    const avatar = next.foods.find((food) => food.id === "viewer-1");
+    expect(avatar).toBeDefined();
+    // Total food count on the board is unchanged (one basic swapped for one avatar).
+    expect(next.foods.length).toBe(totalFoodsBefore);
+    // The avatar never overlaps the snake or another food.
+    const occupiedBySnake = state.snake.some((seg) => seg.x === avatar!.pos.x && seg.y === avatar!.pos.y);
+    expect(occupiedBySnake).toBe(false);
+    const overlappingFoods = next.foods.filter(
+      (food) => food.id !== "viewer-1" && food.pos.x === avatar!.pos.x && food.pos.y === avatar!.pos.y,
+    );
+    expect(overlappingFoods.length).toBe(0);
+  });
+
+  test("queues the avatar instead of overlapping when even the avatar limit's worth of basic food is unavailable", () => {
+    const cfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 4, boardHeight: 4, gameMode: "full_food", maxAvatarFoods: 20 };
+    let state: GameState = { ...createGame(cfg, rngSeq([0])), status: "playing" };
+    // Swap every single basic food out for an avatar first, leaving none to swap onto.
+    for (let i = 0; i < state.foods.length; i++) {
+      state = enqueueAvatarFood(state, { id: `viewer-${i}`, avatarUrl: "x", authorName: "x" }, rngSeq([0]));
+    }
+    expect(state.foods.some((food) => food.kind === "basic")).toBe(false);
+
+    const beforeCount = state.foods.length;
+    const next = enqueueAvatarFood(state, { id: "viewer-overflow", avatarUrl: "x", authorName: "x" }, rngSeq([0]));
+    // No basic food left to swap onto — queues instead of overlapping anything.
+    expect(next.foods.length).toBe(beforeCount);
+    expect(next.foodQueue.some((food) => food.id === "viewer-overflow")).toBe(true);
+  });
+
+  test("promoting a queued avatar in full_food also swaps onto a basic food's cell, never overlapping", () => {
+    const cfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 6, boardHeight: 6, gameMode: "full_food", maxAvatarFoods: 1 };
+    let state: GameState = { ...createGame(cfg, rngSeq([0])), status: "playing", direction: "right" };
+    const head = state.snake[0]!;
+    const eatPos = { x: head.x + 1, y: head.y };
+    // Turn whatever basic food sits directly ahead of the head into the
+    // avatar the snake is about to eat, and queue a second avatar behind it
+    // — deterministic, so promotion can't collide with a food already
+    // occupying the same cell by chance of the real (random) spawn.
+    state = {
+      ...state,
+      foods: state.foods.map((food) =>
+        food.pos.x === eatPos.x && food.pos.y === eatPos.y
+          ? { ...food, id: "viewer-1", kind: "avatar" as const, avatarUrl: "x", authorName: "x" }
+          : food,
+      ),
+      foodQueue: [{ id: "viewer-2", pos: { x: -1, y: -1 }, type: "apple_red", kind: "avatar", avatarUrl: "x", authorName: "x" }],
+    };
+
+    const next = tick(state, rngSeq([0.9]));
+    const promoted = next.foods.find((food) => food.id === "viewer-2");
+    expect(promoted).toBeDefined();
+    expect(next.foodQueue.length).toBe(0);
+    const overlapping = next.foods.filter(
+      (food) => food.id !== "viewer-2" && food.pos.x === promoted!.pos.x && food.pos.y === promoted!.pos.y,
+    );
+    expect(overlapping.length).toBe(0);
+  });
+});
+
+describe("maze wall generation (#101 — occupies the whole board)", () => {
+  function freeCellsConnected(width: number, height: number, walls: Set<string>): boolean {
+    let start: { x: number; y: number } | null = null;
+    let total = 0;
+    for (let x = 0; x < width; x++) {
+      for (let y = 0; y < height; y++) {
+        if (!walls.has(`${x},${y}`)) {
+          if (!start) start = { x, y };
+          total++;
+        }
+      }
+    }
+    if (!start) return true;
+    const seen = new Set<string>([`${start.x},${start.y}`]);
+    const queue = [start];
+    let cursor = 0;
+    while (cursor < queue.length) {
+      const c = queue[cursor++]!;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+        const nx = c.x + dx, ny = c.y + dy;
+        const key = `${nx},${ny}`;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        if (walls.has(key) || seen.has(key)) continue;
+        seen.add(key);
+        queue.push({ x: nx, y: ny });
+      }
+    }
+    return seen.size === total;
+  }
+
+  // A mix of even/even (the two real presets), even/odd, and odd/odd boards —
+  // the algorithm's border-anchoring behaves differently in each case.
+  const dims: [number, number][] = [
+    [16, 12], [18, 14], [10, 8], [9, 8], [8, 9], [15, 11], [17, 13],
+  ];
+
+  test("every free cell is reachable from every other free cell (full connectivity, no isolated pockets)", () => {
+    for (const [w, h] of dims) {
+      for (let seed = 0; seed < 3; seed++) {
+        let calls = 0;
+        const rng = () => ((seed * 7919 + calls++ * 104729) % 233280) / 233280;
+        const state = createGame({ ...DEFAULT_CONFIG, boardWidth: w, boardHeight: h, gameMode: "maze_harvest" }, rng);
+        expect(freeCellsConnected(w, h, state.walls), `${w}x${h} seed=${seed}`).toBe(true);
+      }
+    }
+  });
+
+  test("the board perimeter is never entirely free (no moat ring around the maze)", () => {
+    for (const [w, h] of dims) {
+      for (let seed = 0; seed < 3; seed++) {
+        let calls = 0;
+        const rng = () => ((seed * 6151 + calls++ * 89653) % 233280) / 233280;
+        const state = createGame({ ...DEFAULT_CONFIG, boardWidth: w, boardHeight: h, gameMode: "maze_race" }, rng);
+        const perimeterHasWall =
+          Array.from({ length: w }, (_, x) => state.walls.has(`${x},0`) || state.walls.has(`${x},${h - 1}`)).some(Boolean) ||
+          Array.from({ length: h }, (_, y) => state.walls.has(`0,${y}`) || state.walls.has(`${w - 1},${y}`)).some(Boolean);
+        expect(perimeterHasWall, `${w}x${h} seed=${seed}`).toBe(true);
+      }
+    }
+  });
+
+  test("no internal row or column is entirely wall (no redundant dead strip)", () => {
+    for (const [w, h] of dims) {
+      const state = createGame({ ...DEFAULT_CONFIG, boardWidth: w, boardHeight: h, gameMode: "maze_harvest" }, rngSeq([0.6]));
+      for (let y = 1; y < h - 1; y++) {
+        const rowFullWall = Array.from({ length: w }, (_, x) => state.walls.has(`${x},${y}`)).every(Boolean);
+        expect(rowFullWall, `row ${y} of ${w}x${h}`).toBe(false);
+      }
+      for (let x = 1; x < w - 1; x++) {
+        const colFullWall = Array.from({ length: h }, (_, y) => state.walls.has(`${x},${y}`)).every(Boolean);
+        expect(colFullWall, `col ${x} of ${w}x${h}`).toBe(false);
+      }
+    }
+  });
+
+  test("the snake's starting cell and every initial food/target are connected", () => {
+    for (const [w, h] of dims) {
+      const state = createGame({ ...DEFAULT_CONFIG, boardWidth: w, boardHeight: h, gameMode: "maze_race" }, rngSeq([0.4]));
+      const head = state.snake[0]!;
+      const seen = new Set<string>([`${head.x},${head.y}`]);
+      const queue = [head];
+      let cursor = 0;
+      while (cursor < queue.length) {
+        const c = queue[cursor++]!;
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]] as const) {
+          const nx = c.x + dx, ny = c.y + dy;
+          const key = `${nx},${ny}`;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          if (state.walls.has(key) || seen.has(key)) continue;
+          seen.add(key);
+          queue.push({ x: nx, y: ny });
+        }
+      }
+      for (const food of state.foods) {
+        expect(seen.has(`${food.pos.x},${food.pos.y}`), `${w}x${h} food ${food.id}`).toBe(true);
+      }
+    }
+  });
+});
+
 describe("pudding wall invariants", () => {
   function freeCellsConnected(boardWidth: number, boardHeight: number, walls: Set<string>): boolean {
     let start: { x: number; y: number } | null = null;
@@ -437,6 +610,31 @@ describe("pudding wall invariants", () => {
     const next = tick(state);
     expect(next.walls.has("2,2")).toBe(false);
   });
+
+  test("a new pudding wall is never placed 4-adjacent to the current food (#116)", () => {
+    const cfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 14, boardHeight: 10, gameMode: "pudding" };
+    for (let seed = 0; seed < 8; seed++) {
+      let calls = 0;
+      const rng = () => ((seed * 9301 + (calls++ * 49297)) % 233280) / 233280;
+      let state = { ...createGame(cfg, rng), status: "playing" as const };
+      let prevWalls = state.walls;
+      for (let t = 0; t < 200; t++) {
+        state = tick(state, rng) as typeof state;
+        if (state.status !== "playing") break;
+        if (state.walls.size > prevWalls.size) {
+          const addedWall = [...state.walls].find((w) => !prevWalls.has(w))!;
+          const [wx, wy] = addedWall.split(",").map(Number);
+          for (const food of state.foods) {
+            const dx = Math.abs(wx - food.pos.x);
+            const dy = Math.abs(wy - food.pos.y);
+            const isAdjacent = (dx === 1 && dy === 0) || (dx === 0 && dy === 1);
+            expect(isAdjacent, `seed=${seed} t=${t}: wall ${addedWall} is 4-adjacent to food ${food.id} at ${food.pos.x},${food.pos.y}`).toBe(false);
+          }
+        }
+        prevWalls = state.walls;
+      }
+    }
+  });
 });
 
 // relocateStuckFoods only runs in pudding mode (dynamic walls can permanently seal
@@ -496,5 +694,115 @@ describe("stuck food self-heals", () => {
     const food = next.foods.find((entry) => entry.id === "reachable-food");
     expect(food?.pos).toEqual(foodPos);
     expect(next.foodBlockedTicks["reachable-food"]).toBe(0);
+  });
+});
+
+describe("avatar food carry-over across a round reset (#111)", () => {
+  test("carryOverAvatarFoods collects both on-board avatars and queued ones", () => {
+    const cfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 12, boardHeight: 12, maxAvatarFoods: 1 };
+    let state = createGame(cfg, rngSeq([0.1]));
+    state = { ...state, status: "playing" };
+    state = enqueueAvatarFood(state, { id: "on-board", avatarUrl: "a", authorName: "Ana" });
+    state = enqueueAvatarFood(state, { id: "queued", avatarUrl: "b", authorName: "Bia" });
+
+    const pending = carryOverAvatarFoods(state);
+    expect(pending.map((a) => a.id).sort()).toEqual(["on-board", "queued"]);
+  });
+
+  test("reenqueueAvatarFoods places carried-over avatars back onto a fresh round's state", () => {
+    const cfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 12, boardHeight: 12, maxAvatarFoods: 3 };
+    const freshState = { ...createGame(cfg, rngSeq([0.2])), status: "playing" as const };
+    const pending = [
+      { id: "viewer-1", avatarUrl: "a", authorName: "Ana" },
+      { id: "viewer-2", avatarUrl: "b", authorName: "Bia" },
+    ];
+
+    const next = reenqueueAvatarFoods(freshState, pending, rngSeq([0.3]));
+    const ids = next.foods.filter((f) => f.kind === "avatar").map((f) => f.id);
+    expect(ids.sort()).toEqual(["viewer-1", "viewer-2"]);
+  });
+
+  test("a full round trip (carry over then reenqueue) never duplicates an already-eaten avatar", () => {
+    const cfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 12, boardHeight: 12, maxAvatarFoods: 3 };
+    let state: GameState = { ...createGame(cfg, rngSeq([0.1])), status: "playing" };
+    state = enqueueAvatarFood(state, { id: "eaten", avatarUrl: "a", authorName: "Ana" });
+    state = enqueueAvatarFood(state, { id: "still-there", avatarUrl: "b", authorName: "Bia" });
+    // Simulate "eaten" having already been consumed this round (removed from foods).
+    state = { ...state, foods: state.foods.filter((f) => f.id !== "eaten") };
+
+    const pending = carryOverAvatarFoods(state);
+    expect(pending.some((a) => a.id === "eaten")).toBe(false);
+    expect(pending.some((a) => a.id === "still-there")).toBe(true);
+
+    const fresh = { ...createGame(cfg, rngSeq([0.2])), status: "playing" as const };
+    const next = reenqueueAvatarFoods(fresh, pending, rngSeq([0.3]));
+    const stillThereCount = next.foods.filter((f) => f.id === "still-there").length;
+    expect(stillThereCount).toBe(1);
+    expect(next.foods.some((f) => f.id === "eaten")).toBe(false);
+  });
+
+  test("overflow beyond maxAvatarFoods stays queued rather than dropped on reenqueue", () => {
+    const cfg: GameConfig = { ...DEFAULT_CONFIG, boardWidth: 12, boardHeight: 12, maxAvatarFoods: 1 };
+    const fresh = { ...createGame(cfg, rngSeq([0.1])), status: "playing" as const };
+    const pending = [
+      { id: "viewer-1", avatarUrl: "a", authorName: "Ana" },
+      { id: "viewer-2", avatarUrl: "b", authorName: "Bia" },
+    ];
+    const next = reenqueueAvatarFoods(fresh, pending, rngSeq([0.2]));
+    expect(next.foods.filter((f) => f.kind === "avatar").length).toBe(1);
+    expect(next.foodQueue.length).toBe(1);
+  });
+});
+
+describe("maze spawn forces exploration (#114)", () => {
+  function manhattan(a: { x: number; y: number }, b: { x: number; y: number }): number {
+    return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+  }
+
+  test("initial food in maze_harvest spawns reasonably far from the head, not immediately adjacent", () => {
+    let closeSpawns = 0;
+    const total = 20;
+    for (let seed = 0; seed < total; seed++) {
+      let calls = 0;
+      const rng = () => ((seed * 7919 + calls++ * 104729) % 233280) / 233280;
+      const state = createGame({ ...DEFAULT_CONFIG, boardWidth: 18, boardHeight: 14, gameMode: "maze_harvest" }, rng);
+      const head = state.snake[0]!;
+      const food = state.foods[0]!;
+      if (manhattan(head, food.pos) <= 2) closeSpawns++;
+    }
+    // Not a hard guarantee (tight local pockets can still force a close spawn),
+    // but the vast majority should land meaningfully far from the head.
+    expect(closeSpawns / total).toBeLessThan(0.2);
+  });
+
+  test("maze_harvest avatar spawns prefer a different quadrant than the head's current one", () => {
+    let differentQuadrant = 0;
+    const total = 20;
+    const w = 18;
+    const h = 14;
+    const quadrantOf = (pos: { x: number; y: number }) => (pos.x < w / 2 ? 0 : 1) + (pos.y < h / 2 ? 0 : 2);
+    for (let seed = 0; seed < total; seed++) {
+      let calls = 0;
+      const rng = () => ((seed * 6151 + calls++ * 89653) % 233280) / 233280;
+      let state: GameState = { ...createGame({ ...DEFAULT_CONFIG, boardWidth: w, boardHeight: h, gameMode: "maze_harvest", maxAvatarFoods: 3 }, rng), status: "playing" };
+      const headQuadrant = quadrantOf(state.snake[0]!);
+      state = enqueueAvatarFood(state, { id: "viewer-1", avatarUrl: "x", authorName: "x" }, rng);
+      const avatar = state.foods.find((f) => f.kind === "avatar")!;
+      if (quadrantOf(avatar.pos) !== headQuadrant) differentQuadrant++;
+    }
+    expect(differentQuadrant / total).toBeGreaterThan(0.6);
+  });
+
+  test("falls back to a closer spawn on a small/tight maze rather than finding nothing", () => {
+    // A small 8x6 maze_harvest board may not have any cell 6+ away from the
+    // head — pickSafeSpawn (exercised via createGame's initial food spawn)
+    // must still return a valid, reachable cell instead of failing.
+    for (let seed = 0; seed < 10; seed++) {
+      let calls = 0;
+      const rng = () => ((seed * 3571 + calls++ * 65537) % 233280) / 233280;
+      const state = createGame({ ...DEFAULT_CONFIG, boardWidth: 8, boardHeight: 6, gameMode: "maze_harvest" }, rng);
+      expect(state.foods.length).toBeGreaterThan(0);
+      expect(state.walls.has(`${state.foods[0]!.pos.x},${state.foods[0]!.pos.y}`)).toBe(false);
+    }
   });
 });

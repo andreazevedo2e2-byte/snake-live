@@ -30,6 +30,27 @@ npm test       # roda a suíte de testes (vitest)
 npm run dev    # frontend (vite) + backend de chat juntos
 ```
 
+## Variáveis de ambiente
+
+O projeto usa apenas estas variáveis hoje:
+
+- `VITE_CHAT_WS_URL`: URL do WebSocket consumido pelo frontend
+- `PORT`: porta do servidor Node/WebSocket
+- `SNAKE_CHAT`: `fake`, `silent` ou `youtube`
+- `SNAKE_LIVE_URL`: URL da live, obrigatória apenas em `youtube`
+
+Existe um arquivo modelo em [`/.env.example`](.env.example).
+
+### Importante sobre Supabase
+
+Apesar do token Supabase poder ser útil para integrações futuras, o **Snake Live atual não
+depende de Supabase**. Não há tabelas, autenticação, storage nem chamadas ao SDK do Supabase
+no código atual.
+
+Se o frontend for publicado no Vercel, o ponto crítico de produção não é `NEXT_PUBLIC_SUPABASE_*`,
+e sim um backend WebSocket acessível para `VITE_CHAT_WS_URL`. Sem esse backend, o Vercel serve a
+interface, mas não a automação completa do jogo/chat.
+
 A fonte de chat é controlada pela variável `SNAKE_CHAT`:
 
 | `SNAKE_CHAT` | Comportamento |

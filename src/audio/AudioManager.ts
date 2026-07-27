@@ -39,10 +39,6 @@ export class AudioManager {
     this.sfx.eat();
   }
 
-  onBoost(): void {
-    this.sfx.boost();
-  }
-
   onSpeedMilestone(): void {
     this.sfx.speedMilestone();
   }

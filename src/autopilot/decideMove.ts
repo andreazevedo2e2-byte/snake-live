@@ -183,7 +183,9 @@ function cycleForwardStep(
   return null;
 }
 
-function cycleShortcutPath(state: GameState, order: number[], w: number, h: number): Vec2[] | null {
+/** Exported only for the #107 property test (never contains a body cell) —
+ * decideMove itself only ever surfaces the first step of this path. */
+export function cycleShortcutPath(state: GameState, order: number[], w: number, h: number): Vec2[] | null {
   const head = state.snake[0]!;
   const tail = state.snake[state.snake.length - 1]!;
   const n = order.length;
@@ -191,6 +193,15 @@ function cycleShortcutPath(state: GameState, order: number[], w: number, h: numb
   const tailOrder = cycleIndex(order, tail, w);
   const distToTail = (tailOrder - headOrder + n) % n;
   const targetSet = new Set(state.foods.map((food) => key(food.pos)));
+  // The Hamiltonian cycle invariant guarantees every cell with rank strictly
+  // between headOrder and tailOrder is unoccupied by the body, which is why
+  // the rank check below (npRank <= curRank || npRank >= distToTail) is
+  // sufficient on its own — but #107 wants this proven by construction, not
+  // just by invariant, so any body cell (tail excluded — it vacates) is
+  // rejected explicitly too. Belt and suspenders: a rare edge case in the
+  // invariant (e.g. an unexpected multi-food rank overlap) can never turn
+  // into a plotted path straight through the snake's own body.
+  const bodyBlocked = new Set(state.snake.slice(0, -1).map(key));
 
   const rankOf = (pos: Vec2): number => (cycleIndex(order, pos, w) - headOrder + n) % n;
   const parent = new Map<string, Vec2>();
@@ -211,7 +222,7 @@ function cycleShortcutPath(state: GameState, order: number[], w: number, h: numb
       const np = { x: cur.x + v.x, y: cur.y + v.y };
       if (!inBounds(np, w, h)) continue;
       const npKey = key(np);
-      if (seen.has(npKey)) continue;
+      if (seen.has(npKey) || bodyBlocked.has(npKey)) continue;
       const npRank = rankOf(np);
       if (npRank <= curRank || npRank >= distToTail) continue;
       seen.add(npKey);
@@ -563,6 +574,16 @@ function simulatePath(state: GameState, path: Vec2[]): Vec2[] | null {
   return snake;
 }
 
+/** True if eating whatever food sits at `pos` ends the round right there —
+ * the one case where walking into a dead end to reach it is actually safe,
+ * since there is no "next tick" left for the no-U-turn trap to bite. */
+function eatingEndsRound(state: GameState, pos: Vec2): boolean {
+  const food = state.foods.find((f) => f.pos.x === pos.x && f.pos.y === pos.y);
+  if (!food) return false;
+  if (state.config.gameMode === "maze_race" && food.kind === "basic") return true;
+  return state.config.foodGoal !== null && state.score + 1 >= state.config.foodGoal;
+}
+
 export function decideMove(
   state: GameState,
   rng: Rng = Math.random,
@@ -587,33 +608,81 @@ export function decideMove(
   const playableCells = Math.max(1, (w * h) - state.walls.size);
   const fill = state.snake.length / playableCells;
 
-  if (hasWalls) {
-    // A maze's corridors are a spanning tree (no loops), so the recursive
-    // lookahead in shortestProjectedFoodPathToFood — "is there a sequence of
-    // future moves that eventually restores safety" — is what actually
-    // matters here, not a single-snapshot floodfill/tail check that can't
-    // account for the tail vacating cells as the snake keeps moving.
-    const projectedPath = shortestProjectedFoodPathToFood(state, w, h);
-    if (projectedPath && projectedPath.length > 0) {
-      const firstDir = directionBetween(state.snake[0]!, projectedPath[0]!);
-      if (legal.includes(firstDir)) return firstDir;
-    }
+  // Maze modes (dense, structured, corridor-based) and pudding (sparse
+  // dynamic walls scattered across an otherwise-open board) need different
+  // strategies even though both set state.walls. Pudding has plenty of open
+  // room around its few obstacles, so shortestProjectedFoodPathToFood's
+  // depth-5 tail-recovery lookahead works well there (as it did before #101,
+  // which never touched pudding's wall generation at all). A structured
+  // maze is a different animal: see the isMazeMode branch below.
+  const isMazeMode = state.config.gameMode === "maze_race" || state.config.gameMode === "maze_harvest";
 
-    // No comfortably safe path to any food (tight maze, or the only
-    // reachable food sits in a pocket that's nearly full of the snake's own
-    // body) — chase the tail instead of forcing the issue. This both keeps
-    // moving (no stalling) and buys time: the tail vacates cells as it
-    // goes, so the same food often becomes safely reachable again shortly,
-    // or a fresh one spawns somewhere better.
+  if (hasWalls && isMazeMode) {
+    // generateMazeWalls in GameState.ts carves the board as a spanning tree,
+    // then braids every dead end into a small loop — real loops, but the
+    // maze still keeps its 1-wide-corridor character. A *pure* tree would
+    // make shortestProjectedFoodPathToFood's own gate (hasFutureTailRecovery
+    // / canReachOwnTail — "is there a path back to my tail not through my
+    // body") almost never satisfiable, since a tree has exactly one path
+    // between any two points and the body already occupies it; braiding's
+    // loops are what make tail-reachability meaningful again. Still, the
+    // plain shortest safe-ish path to the nearest food (walls+body aware, no
+    // extra check) is the more reliable primary driver here, gated by a
+    // floodfill-room veto: never take a step that leaves less reachable free
+    // space than the snake's own length — unless the winning food sits right
+    // there, or every legal option is equally cramped (then there's nothing
+    // better to do — occasional losses here are the accepted tradeoff, same
+    // as elsewhere in this file).
+    const head = state.snake[0]!;
+    const nonTrap = legal.filter((dir) => {
+      const v = DIRECTION_VECTORS[dir];
+      const pos = { x: head.x + v.x, y: head.y + v.y };
+      if (eatingEndsRound(state, pos)) return true;
+      const sim = simulateMove(state, dir);
+      return floodFillFrom(sim, w, h, state.walls) >= sim.length;
+    });
+    const safeLegal = nonTrap.length > 0 ? nonTrap : legal;
+
+    const foodDir = shortestFirstStepToward(state, w, h, state.foods.map((food) => food.pos));
+    if (foodDir && safeLegal.includes(foodDir)) return foodDir;
+
+    // No safe step toward any food (tight maze, or the only reachable food
+    // sits in a pocket that's nearly full of the snake's own body) — chase
+    // the tail instead of forcing the issue. This both keeps moving (no
+    // stalling) and buys time: the tail vacates cells as it goes, so the
+    // same food often becomes safely reachable again shortly, or a fresh
+    // one spawns somewhere better.
     const tailPath = shortestPathToTail(state.snake, w, h, state.walls);
     if (tailPath && tailPath.length > 0) {
-      const firstDir = directionBetween(state.snake[0]!, tailPath[0]!);
+      const firstDir = directionBetween(head, tailPath[0]!);
+      if (safeLegal.includes(firstDir)) return firstDir;
+    }
+
+    const bestSafe = safeLegal
+      .map((dir) => ({ dir, space: floodFillFrom(simulateMove(state, dir), w, h, state.walls) }))
+      .sort((a, b) => b.space - a.space)[0];
+    return bestSafe?.dir ?? legal[0] ?? state.direction;
+  }
+
+  if (hasWalls) {
+    // Pudding: sparse dynamic walls on an otherwise-open board — plenty of
+    // room for the recursive lookahead in shortestProjectedFoodPathToFood
+    // ("is there a sequence of future moves that eventually restores
+    // safety") to actually matter, unlike a structured maze's narrow
+    // corridors.
+    const head = state.snake[0]!;
+    const projectedPath = shortestProjectedFoodPathToFood(state, w, h);
+    if (projectedPath && projectedPath.length > 0) {
+      const firstDir = directionBetween(head, projectedPath[0]!);
       if (legal.includes(firstDir)) return firstDir;
     }
 
-    // No tail path either (snake already boxed into a dead end) — take
-    // whatever's left rather than freezing; occasional losses here are the
-    // accepted tradeoff, same as elsewhere in this file.
+    const tailPath = shortestPathToTail(state.snake, w, h, state.walls);
+    if (tailPath && tailPath.length > 0) {
+      const firstDir = directionBetween(head, tailPath[0]!);
+      if (legal.includes(firstDir)) return firstDir;
+    }
+
     const foodDir = shortestFirstStepToward(state, w, h, state.foods.map((food) => food.pos));
     if (foodDir && legal.includes(foodDir)) return foodDir;
 
@@ -623,6 +692,17 @@ export function decideMove(
     return bestSafe?.dir ?? legal[0] ?? state.direction;
   }
 
+  // v3.1 analysis (26/07, instrumented A/B over full games on 10x8): the
+  // mid-game DOES visibly pass up geometrically short paths to food — 16.9%
+  // of all moves increase the BFS distance to it — but every attempt to let
+  // this greedy path run past the early game cratered the win rate, because
+  // eating out of Hamiltonian-cycle order permanently breaks the rank
+  // invariant the whole endgame depends on:
+  //   score<3 (baseline)              → 12/12 wins, 16.9% detour moves
+  //   fill<0.5, any path length       →  3/12 wins,  8.7% detours
+  //   fill<0.5 but path length <= 4   →  2/12 wins, 12.2% detours
+  //   fill<0.2                        →  9/12 wins, 15.6% detours
+  // The "detours" are the price of never dying; keep the original gate.
   const directPath = shortestSafePathToFood(state, w, h);
   if (directPath && directPath.length > 0 && state.score < 3) {
     const firstDir = directionBetween(state.snake[0]!, directPath[0]!);

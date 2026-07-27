@@ -11,6 +11,10 @@ export function cappedEffectiveSpeed(chatMultiplier: number, baseMultiplier: num
 }
 const MAX_CHARGE = 50;
 const CHARGE_PER_COMMENT = 1;
+// The HUD says "MORE CHAT = FASTER" — every allowed comment should nudge the
+// bar, not just ones that happen to say "speed". Smaller than the dedicated
+// command's bump so typing the actual word still visibly matters more.
+const PASSIVE_CHARGE_PER_COMMENT = 0.3;
 
 export interface SpeedMeterState {
   charge: number; // 0..MAX_CHARGE
@@ -34,6 +38,15 @@ export function createSpeedMeter(initialMultiplier = MIN_MULTIPLIER): SpeedMeter
 export function addComment(state: SpeedMeterState, isLocked = false): SpeedMeterState {
   if (isLocked) return state;
   const charge = Math.min(MAX_CHARGE, state.charge + CHARGE_PER_COMMENT);
+  return { charge, multiplier: multiplierForCharge(charge) };
+}
+
+/** Any allowed chat message that isn't the dedicated "speed" command still
+ * nudges the bar a little — matches the HUD's "MORE CHAT = FASTER" text,
+ * which previously only the literal word "speed" made true. */
+export function addPassiveComment(state: SpeedMeterState, isLocked = false): SpeedMeterState {
+  if (isLocked) return state;
+  const charge = Math.min(MAX_CHARGE, state.charge + PASSIVE_CHARGE_PER_COMMENT);
   return { charge, multiplier: multiplierForCharge(charge) };
 }
 
